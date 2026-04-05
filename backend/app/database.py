@@ -11,11 +11,14 @@ async def init_db() -> None:
 
 
 async def close_db() -> None:
-    if _pool:
+    global _pool
+    if _pool is not None:
         await _pool.close()
+        _pool = None
 
 
 async def get_db() -> AsyncGenerator[asyncpg.Connection, None]:
-    assert _pool is not None, "DB pool not initialized"
+    if _pool is None:
+        raise RuntimeError("DB pool not initialized")
     async with _pool.acquire() as conn:
         yield conn
