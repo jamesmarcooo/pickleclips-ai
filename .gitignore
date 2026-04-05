@@ -1,0 +1,41 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+
+# Node
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# Models / large files
+*.pt
+*.pth
+*.onnx
+
+# Temp pipeline files
+/tmp/pickleclips/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Superpowers
+.superpowers/
