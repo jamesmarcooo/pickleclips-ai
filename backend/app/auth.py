@@ -11,11 +11,13 @@ class OptionalHTTPBearer(HTTPBearer):
     async def __call__(self, request: Request) -> Optional[HTTPAuthorizationCredentials]:
         try:
             return await super().__call__(request)
-        except HTTPException:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated",
-            )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_403_FORBIDDEN:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Not authenticated",
+                )
+            raise
 
 
 security = OptionalHTTPBearer()
@@ -31,7 +33,7 @@ async def get_current_user(
             token,
             settings.supabase_jwt_secret,
             algorithms=["HS256"],
-            options={"verify_aud": False},  # Supabase tokens may have audience claims
+            options={"verify_aud": False},  # Supabase sets aud="authenticated"; skip audience check
         )
         user_id: str = payload.get("sub")
         if not user_id:

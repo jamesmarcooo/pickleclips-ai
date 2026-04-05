@@ -36,6 +36,6 @@ def test_user_id():
 
 
 @pytest.fixture
-async def client():
+async def client(mock_db):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
