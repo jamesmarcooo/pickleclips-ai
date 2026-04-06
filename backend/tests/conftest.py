@@ -3,6 +3,7 @@ from httpx import AsyncClient, ASGITransport
 from unittest.mock import patch, AsyncMock
 from app.main import app
 from app.config import settings
+from app.services.storage import get_r2_client
 import jose.jwt as jwt
 import time
 
@@ -23,6 +24,13 @@ def mock_db():
     with patch("app.database.init_db", new=AsyncMock()), \
          patch("app.database.close_db", new=AsyncMock()):
         yield
+
+
+@pytest.fixture(autouse=True)
+def clear_r2_client_cache():
+    get_r2_client.cache_clear()
+    yield
+    get_r2_client.cache_clear()
 
 
 @pytest.fixture
