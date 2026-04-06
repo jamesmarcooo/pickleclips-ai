@@ -226,17 +226,10 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
     8. Write highlights + rallies to DB
     9. Update video status → analyzed
     """
-    import asyncio
-    import asyncpg as apg
-    import boto3
-    import json
     import uuid
-    import shutil
-    from pathlib import Path
-    from botocore.config import Config
     from app.ml.reid_tracking import extract_embedding, track_user_across_frames
     from app.ml.rally_detector import build_motion_signal, detect_rallies, Rally
-    from app.ml.score_state_machine import ScoreStateMachine, PointOutcome
+    from app.ml.score_state_machine import ScoreStateMachine
     from app.ml.highlight_scorer import score_highlight, is_lowlight
     from app.ml.clip_extractor import ClipSpec, extract_clips_batch
     from app.ml.person_detection import detect_players
@@ -250,7 +243,7 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
         update_video_status(video_id, "processing")
 
         async def get_video():
-            conn = await apg.connect(settings.database_url)
+            conn = await asyncpg.connect(settings.database_url)
             try:
                 return await conn.fetchrow(
                     "SELECT r2_key_original, r2_key_processed FROM videos WHERE id = $1", video_id
@@ -259,6 +252,8 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
                 await conn.close()
 
         video = asyncio.run(get_video())
+        if video is None:
+            raise ValueError(f"No video record found for {video_id}")
 
         s3 = get_r2_boto_client()
 
@@ -308,15 +303,20 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
             }
             rally_records.append(rally_record)
 
+            shot_quality = 0.5
             raw_score = score_highlight(
                 point_scored=False,
                 point_won_by=None,
                 rally_length=rally_record["shot_count"],
                 attributed_role="user",
-                shot_quality=0.5,
+                shot_quality=shot_quality,
             )
             if rally.duration_seconds > 10:
                 raw_score = min(raw_score * 1.3, 1.0)
+
+            # Phase 1: no shot classifier, so is_lowlight is driven purely by quality threshold
+            lowlight = is_lowlight(shot_quality=shot_quality, point_lost_by_error=False)
+            sub_type = "lowlight" if lowlight else "point_scored"
 
             clip_start_ms = max(0, rally.start_time_ms - 1000)
             clip_end_ms = rally.end_time_ms + 1000
@@ -326,7 +326,7 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
                 "video_id": video_id,
                 "rally_id": rally_id,
                 "attributed_player_role": "user",
-                "sub_highlight_type": "point_scored",
+                "sub_highlight_type": sub_type,
                 "lowlight_type": None,
                 "point_lost_by_error": False,
                 "start_time_ms": clip_start_ms,
@@ -334,7 +334,7 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
                 "highlight_score": raw_score,
                 "highlight_score_raw": raw_score,
                 "shot_type": None,
-                "shot_quality": 0.5,
+                "shot_quality": shot_quality,
                 "point_scored": False,
                 "point_won_by": None,
                 "rally_length": rally_record["shot_count"],
@@ -357,17 +357,18 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
 
         successful_paths = extract_clips_batch(clip_specs)
 
-        # Upload clips to R2
+        # Upload clips to R2; build explicit id→key map (avoid mutating shared dicts)
+        clip_keys: dict[str, str] = {}
         for i, spec in enumerate(clip_specs):
             if spec.output_path in successful_paths:
                 highlight_id = top_highlights[i]["id"]
                 r2_key = f"videos/{video_id}/clips/{highlight_id}.mp4"
                 s3.upload_file(spec.output_path, settings.r2_bucket_name, r2_key)
-                top_highlights[i]["r2_key_clip"] = r2_key
+                clip_keys[highlight_id] = r2_key
 
         # Write all records to DB
         async def save_to_db():
-            conn = await apg.connect(settings.database_url)
+            conn = await asyncpg.connect(settings.database_url)
             try:
                 async with conn.transaction():
                     for r in rally_records:
@@ -391,7 +392,7 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
                             h["sub_highlight_type"], h["lowlight_type"], h["point_lost_by_error"],
                             h["start_time_ms"], h["end_time_ms"], h["highlight_score"], h["highlight_score_raw"],
                             h["shot_quality"], h["point_scored"], h["point_won_by"],
-                            h["rally_length"], h["rally_intensity"], h["score_source"], h.get("r2_key_clip"),
+                            h["rally_length"], h["rally_intensity"], h["score_source"], clip_keys.get(h["id"]),
                         )
                     await conn.execute(
                         "UPDATE videos SET status = 'analyzed' WHERE id = $1", video_id

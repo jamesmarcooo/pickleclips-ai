@@ -1,9 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 import asyncpg
 
 from app.auth import get_current_user
 from app.database import get_db
 from app.services.storage import generate_download_url
+
+class HighlightFeedbackBody(BaseModel):
+    user_feedback: str | None = None
+
 
 # Routes are mounted with /api/v1 prefix in main.py
 router = APIRouter(tags=["highlights"])
@@ -80,12 +85,12 @@ async def get_clip_download_url(
 @router.patch("/highlights/{highlight_id}")
 async def update_highlight_feedback(
     highlight_id: str,
-    body: dict,
+    body: HighlightFeedbackBody,
     user_id: str = Depends(get_current_user),
     db: asyncpg.Connection = Depends(get_db),
 ):
     """Update user feedback (liked/disliked) on a highlight."""
-    feedback = body.get("user_feedback")
+    feedback = body.user_feedback
     if feedback not in ("liked", "disliked", None):
         raise HTTPException(status_code=422, detail="user_feedback must be 'liked', 'disliked', or null")
 
