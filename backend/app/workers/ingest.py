@@ -61,7 +61,7 @@ def transcode_to_1080p(input_path: str, output_path: str) -> None:
             acodec="aac",
             vf="scale=-2:1080",
             preset="fast",
-            crf=23,
+            cq=23,
         )
         .overwrite_output()
         .run(capture_stdout=True, capture_stderr=True)
@@ -158,6 +158,11 @@ def ingest_video(self, video_id: str, user_id: str):
         seed_frame = pick_seed_frame(frames)
         cv2.imwrite(seed_frame_path, seed_frame)
         bboxes = detect_players(seed_frame)
+        # Normalize bbox values to plain Python types for JSON serialization
+        bboxes = [
+            {k: float(v) if hasattr(v, "item") else v for k, v in bbox.items()}
+            for bbox in bboxes
+        ]
 
         # 6. Upload seed frame to R2
         seed_frame_key = f"videos/{video_id}/seed_frame.jpg"
@@ -191,7 +196,8 @@ def ingest_video(self, video_id: str, user_id: str):
         asyncio.run(save_results())
 
     except Exception as exc:
-        update_video_status(video_id, "failed")
+        if self.request.retries >= self.max_retries:
+            update_video_status(video_id, "failed")
         raise self.retry(exc=exc, countdown=60)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
