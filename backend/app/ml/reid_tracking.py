@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import TypedDict
 import numpy as np
 import cv2
 
@@ -41,6 +40,7 @@ def extract_embedding(frame: np.ndarray, bbox: dict) -> np.ndarray:
     Extract 512-dim OSNet appearance embedding from a player crop.
     bbox is {x, y, w, h}.
     Returns a unit-normalized 1D numpy array of shape (512,).
+    Returns a zero vector of shape (512,) if the crop is empty (invalid bbox).
     """
     x, y, w, h = bbox["x"], bbox["y"], bbox["w"], bbox["h"]
     crop = frame[y:y+h, x:x+w]
@@ -112,6 +112,7 @@ def court_position_fallback(
     """
     Assign roles by court x-position when Re-ID confidence is low.
     The detection closest to user_last_x gets the USER role.
+    Remaining detections are assigned PARTNER/OPPONENT roles sorted by center_x.
     """
     if not detections:
         return []
@@ -125,15 +126,21 @@ def court_position_fallback(
     # Assign USER to detection closest to last known user position
     closest_idx = min(range(len(centers)), key=lambda i: abs(centers[i] - user_last_x))
 
+    # Assign remaining roles sorted by center_x (left to right)
+    non_user = sorted(
+        [(i, det) for i, det in enumerate(detections) if i != closest_idx],
+        key=lambda t: center_x(t[1]),
+    )
+
+    role_map = {closest_idx: PlayerRole.USER}
+    for role_idx, (i, _) in enumerate(non_user):
+        role = ROLE_ORDER[role_idx + 1] if role_idx + 1 < len(ROLE_ORDER) else None
+        role_map[i] = role
+
     result = []
-    role_idx = 0
     for i, det in enumerate(detections):
-        if i == closest_idx:
-            result.append({**det, "role": PlayerRole.USER, "reid_conf": 0.0, "used_fallback": True})
-        else:
-            role = ROLE_ORDER[role_idx + 1] if role_idx + 1 < len(ROLE_ORDER) else None
-            result.append({**det, "role": role, "reid_conf": 0.0, "used_fallback": True})
-            role_idx += 1
+        role = role_map.get(i)
+        result.append({**det, "role": role, "reid_conf": 0.0, "used_fallback": True})
 
     return result
 
@@ -150,7 +157,7 @@ def track_user_across_frames(
 
     Returns per-frame list of detections with 'role', 'reid_conf', 'embedding'.
     """
-    user_last_x: float = 0.0
+    user_last_x: float = 0.0  # biases first-frame fallback to leftmost player; acceptable for pickleball court geometry
     labeled_frames = []
 
     for frame, frame_detections in zip(frames, all_detections):

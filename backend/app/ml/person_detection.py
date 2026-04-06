@@ -27,7 +27,7 @@ def detect_players(frame: np.ndarray, max_players: int = 4) -> list[BoundingBox]
     Each bbox is {x, y, w, h} in pixels (top-left origin, positive dimensions).
     """
     model = _get_model()
-    results = model(frame, classes=[0], verbose=False)  # class 0 = person
+    results = model(frame, classes=[0], verbose=False)  # class 0 = person; suppress per-frame stdout logging
 
     bboxes: list[tuple[float, BoundingBox]] = []  # (confidence, bbox)
 

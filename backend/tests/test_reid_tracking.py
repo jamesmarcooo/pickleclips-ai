@@ -21,6 +21,13 @@ def test_cosine_similarity_orthogonal_vectors():
     assert cosine_similarity(v1, v2) == pytest.approx(0.0, abs=1e-6)
 
 
+def test_cosine_similarity_zero_vector():
+    v1 = np.array([1.0, 0.0, 0.0])
+    v2 = np.zeros(3)
+    assert cosine_similarity(v1, v2) == 0.0
+    assert cosine_similarity(v2, v1) == 0.0
+
+
 def test_assign_player_roles_high_confidence():
     """Highest-similarity detection gets role 'user'."""
     seed_embedding = np.array([1.0, 0.0, 0.0])
@@ -44,4 +51,5 @@ def test_court_position_fallback_assigns_by_x_position():
         user_last_x=150,
         frame_width=1920,
     )
-    assert result[0]["role"] == PlayerRole.USER
+    user_det = next(d for d in result if d["role"] == PlayerRole.USER)
+    assert user_det["bbox"]["x"] == 100  # x=100 is closest to user_last_x=150
