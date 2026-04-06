@@ -10,6 +10,8 @@ import '@uppy/core/css/style.min.css'
 import '@uppy/dashboard/css/style.min.css'
 import { api } from '@/lib/api'
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
 interface Props {
   token: string
   onUploadComplete: (videoId: string) => void
@@ -53,7 +55,7 @@ export function UploadZone({ token, onUploadComplete }: Props) {
         { uploadId, key }: { uploadId: string; key: string },
       ) {
         await fetch(
-          `/api/v1/videos/multipart/abort?key=${encodeURIComponent(key)}&upload_id=${uploadId}`,
+          `${API_BASE}/api/v1/videos/multipart/abort?key=${encodeURIComponent(key)}&upload_id=${uploadId}`,
           {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${token}` },
