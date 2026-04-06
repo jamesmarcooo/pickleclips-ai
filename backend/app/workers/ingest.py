@@ -214,6 +214,196 @@ def resume_after_identify(self, video_id: str, user_id: str, seed_bbox: dict):
 
 @celery.task(bind=True, name="app.workers.ingest.run_ai_pipeline", max_retries=2)
 def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
-    """Full AI pipeline: Re-ID → rally detection → scoring → clip extraction."""
-    # Implemented in Task 15
-    raise NotImplementedError("Implemented in Task 15")
+    """
+    Full AI pipeline after user tap:
+    1. Download processed 1080p video + original 2.7K
+    2. Extract frames
+    3. Run Re-ID tracking across all frames
+    4. Run rally detection
+    5. Score each rally as highlight
+    6. Extract clips from 2.7K original
+    7. Upload clips to R2
+    8. Write highlights + rallies to DB
+    9. Update video status → analyzed
+    """
+    import asyncio
+    import asyncpg as apg
+    import boto3
+    import json
+    import uuid
+    import shutil
+    from pathlib import Path
+    from botocore.config import Config
+    from app.ml.reid_tracking import extract_embedding, track_user_across_frames
+    from app.ml.rally_detector import build_motion_signal, detect_rallies, Rally
+    from app.ml.score_state_machine import ScoreStateMachine, PointOutcome
+    from app.ml.highlight_scorer import score_highlight, is_lowlight
+    from app.ml.clip_extractor import ClipSpec, extract_clips_batch
+    from app.ml.person_detection import detect_players
+
+    tmp_dir = Path(f"/tmp/pickleclips/{video_id}")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    processed_path = str(tmp_dir / "processed_1080p.mp4")
+    original_path = str(tmp_dir / "original.mp4")
+
+    try:
+        update_video_status(video_id, "processing")
+
+        async def get_video():
+            conn = await apg.connect(settings.database_url)
+            try:
+                return await conn.fetchrow(
+                    "SELECT r2_key_original, r2_key_processed FROM videos WHERE id = $1", video_id
+                )
+            finally:
+                await conn.close()
+
+        video = asyncio.run(get_video())
+
+        s3 = get_r2_boto_client()
+
+        # Download 1080p working copy for frame extraction
+        s3.download_file(settings.r2_bucket_name, video["r2_key_processed"], processed_path)
+        # Download original for clip extraction
+        s3.download_file(settings.r2_bucket_name, video["r2_key_original"], original_path)
+
+        # Extract frames at 2fps from 1080p working copy
+        frames = extract_frames(processed_path, fps=2)
+
+        # Detect players in each frame
+        all_detections = [
+            [{"bbox": b} for b in detect_players(f)]
+            for f in frames
+        ]
+
+        # Extract seed embedding from the user-tapped bbox on the seed frame
+        seed_frame = pick_seed_frame(frames)
+        seed_embedding = extract_embedding(seed_frame, seed_bbox)
+
+        # Track user across all frames
+        labeled_frames = track_user_across_frames(frames, all_detections, seed_embedding)
+
+        # Build motion signal + detect rallies
+        motion_signal = build_motion_signal(frames)
+        rallies: list[Rally] = detect_rallies(motion_signal, fps=2)
+
+        sm = ScoreStateMachine()
+        rally_records = []
+        highlight_records = []
+
+        for rally in rallies:
+            score_before = sm.get_state().copy()
+            rally_id = str(uuid.uuid4())
+            rally_record = {
+                "id": rally_id,
+                "video_id": video_id,
+                "start_time_ms": rally.start_time_ms,
+                "end_time_ms": rally.end_time_ms,
+                "shot_count": max(1, int(rally.duration_seconds * 1.5)),
+                "intensity_score": min(rally.duration_seconds / 30.0, 1.0),
+                "point_won_by": None,
+                "score_before": json.dumps(score_before),
+                "score_after": json.dumps(score_before),
+                "is_comeback_point": False,
+            }
+            rally_records.append(rally_record)
+
+            raw_score = score_highlight(
+                point_scored=False,
+                point_won_by=None,
+                rally_length=rally_record["shot_count"],
+                attributed_role="user",
+                shot_quality=0.5,
+            )
+            if rally.duration_seconds > 10:
+                raw_score = min(raw_score * 1.3, 1.0)
+
+            clip_start_ms = max(0, rally.start_time_ms - 1000)
+            clip_end_ms = rally.end_time_ms + 1000
+            highlight_id = str(uuid.uuid4())
+            highlight_records.append({
+                "id": highlight_id,
+                "video_id": video_id,
+                "rally_id": rally_id,
+                "attributed_player_role": "user",
+                "sub_highlight_type": "point_scored",
+                "lowlight_type": None,
+                "point_lost_by_error": False,
+                "start_time_ms": clip_start_ms,
+                "end_time_ms": clip_end_ms,
+                "highlight_score": raw_score,
+                "highlight_score_raw": raw_score,
+                "shot_type": None,
+                "shot_quality": 0.5,
+                "point_scored": False,
+                "point_won_by": None,
+                "rally_length": rally_record["shot_count"],
+                "rally_intensity": rally_record["intensity_score"],
+                "score_source": "rule_based",
+                "r2_key_clip": None,
+            })
+
+        # Extract top 15 clips from original 2.7K
+        top_highlights = sorted(highlight_records, key=lambda h: h["highlight_score"], reverse=True)[:15]
+        clip_specs = []
+        for h in top_highlights:
+            clip_path = str(tmp_dir / f"clip_{h['id'][:8]}.mp4")
+            clip_specs.append(ClipSpec(
+                source_path=original_path,
+                output_path=clip_path,
+                start_ms=h["start_time_ms"],
+                end_ms=h["end_time_ms"],
+            ))
+
+        successful_paths = extract_clips_batch(clip_specs)
+
+        # Upload clips to R2
+        for i, spec in enumerate(clip_specs):
+            if spec.output_path in successful_paths:
+                highlight_id = top_highlights[i]["id"]
+                r2_key = f"videos/{video_id}/clips/{highlight_id}.mp4"
+                s3.upload_file(spec.output_path, settings.r2_bucket_name, r2_key)
+                top_highlights[i]["r2_key_clip"] = r2_key
+
+        # Write all records to DB
+        async def save_to_db():
+            conn = await apg.connect(settings.database_url)
+            try:
+                async with conn.transaction():
+                    for r in rally_records:
+                        await conn.execute(
+                            """INSERT INTO rallies (id, video_id, start_time_ms, end_time_ms,
+                               shot_count, intensity_score, point_won_by, score_before, score_after, is_comeback_point)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10)""",
+                            r["id"], r["video_id"], r["start_time_ms"], r["end_time_ms"],
+                            r["shot_count"], r["intensity_score"], r["point_won_by"],
+                            r["score_before"], r["score_after"], r["is_comeback_point"],
+                        )
+                    for h in highlight_records:
+                        await conn.execute(
+                            """INSERT INTO highlights (id, video_id, rally_id, attributed_player_role,
+                               sub_highlight_type, lowlight_type, point_lost_by_error,
+                               start_time_ms, end_time_ms, highlight_score, highlight_score_raw,
+                               shot_quality, point_scored, point_won_by, rally_length, rally_intensity,
+                               score_source, r2_key_clip)
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)""",
+                            h["id"], h["video_id"], h["rally_id"], h["attributed_player_role"],
+                            h["sub_highlight_type"], h["lowlight_type"], h["point_lost_by_error"],
+                            h["start_time_ms"], h["end_time_ms"], h["highlight_score"], h["highlight_score_raw"],
+                            h["shot_quality"], h["point_scored"], h["point_won_by"],
+                            h["rally_length"], h["rally_intensity"], h["score_source"], h.get("r2_key_clip"),
+                        )
+                    await conn.execute(
+                        "UPDATE videos SET status = 'analyzed' WHERE id = $1", video_id
+                    )
+            finally:
+                await conn.close()
+
+        asyncio.run(save_to_db())
+
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            update_video_status(video_id, "failed")
+        raise self.retry(exc=exc, countdown=120)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
