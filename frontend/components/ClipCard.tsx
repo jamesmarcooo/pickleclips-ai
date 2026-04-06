@@ -17,18 +17,24 @@ interface Props {
 
 export function ClipCard({ highlight, token }: Props) {
   const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
 
   const duration = ((highlight.end_time_ms - highlight.start_time_ms) / 1000).toFixed(1)
   const startSec = (highlight.start_time_ms / 1000).toFixed(1)
 
   async function handleDownload() {
     setDownloading(true)
+    setDownloadError(null)
     try {
       const { download_url } = await api.getClipDownloadUrl(token, highlight.id)
       const a = document.createElement('a')
       a.href = download_url
       a.download = `clip-${highlight.id.slice(0, 8)}.mp4`
+      document.body.appendChild(a)
       a.click()
+      document.body.removeChild(a)
+    } catch (e: unknown) {
+      setDownloadError(e instanceof Error ? e.message : 'Download failed')
     } finally {
       setDownloading(false)
     }
@@ -47,6 +53,7 @@ export function ClipCard({ highlight, token }: Props) {
           Score: {(highlight.highlight_score * 100).toFixed(0)}
         </span>
       </div>
+      {downloadError && <p className="mt-2 text-xs text-red-600">{downloadError}</p>}
       <button
         onClick={handleDownload}
         disabled={downloading}

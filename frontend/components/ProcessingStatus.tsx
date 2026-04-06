@@ -32,8 +32,12 @@ export function ProcessingStatus({ videoId, initialStatus, onAnalyzed }: Props) 
         { event: 'UPDATE', schema: 'public', table: 'videos', filter: `id=eq.${videoId}` },
         (payload) => {
           const newStatus = (payload.new as { status: string }).status
-          setStatus(newStatus)
-          if (newStatus === 'analyzed') onAnalyzedRef.current()
+          setStatus((prev) => {
+            if (newStatus === 'analyzed' && prev !== 'analyzed') {
+              onAnalyzedRef.current()
+            }
+            return newStatus
+          })
         }
       )
       .subscribe()
