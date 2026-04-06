@@ -1,5 +1,9 @@
+import logging
 from dataclasses import dataclass
+
 import ffmpeg
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -8,6 +12,10 @@ class ClipSpec:
     output_path: str
     start_ms: int
     end_ms: int
+
+    def __post_init__(self):
+        if self.end_ms <= self.start_ms:
+            raise ValueError(f"end_ms ({self.end_ms}) must be greater than start_ms ({self.start_ms})")
 
     @property
     def start_seconds(self) -> float:
@@ -53,5 +61,6 @@ def extract_clips_batch(specs: list[ClipSpec]) -> list[str]:
             successful.append(spec.output_path)
         except ffmpeg.Error as e:
             # Log and continue — don't fail the whole batch for one bad clip
-            print(f"Clip extraction failed for {spec.start_ms}-{spec.end_ms}ms: {e.stderr.decode()}")
+            stderr_msg = e.stderr.decode() if e.stderr else "(no stderr)"
+            logger.error("Clip extraction failed for %d-%dms: %s", spec.start_ms, spec.end_ms, stderr_msg)
     return successful

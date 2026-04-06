@@ -16,7 +16,7 @@ def score_highlight(
     rally_length: int,
     attributed_role: str,
     shot_quality: float = 0.5,
-    weights: RoleWeights = None,
+    weights: RoleWeights | None = None,
 ) -> float:
     """
     Phase 1 highlight scorer. Uses only signals available without ball/pose models.
@@ -54,7 +54,7 @@ def score_highlight(
     elif attributed_role in ("opponent_1", "opponent_2"):
         role_weight = weights.opponent_1
     else:
-        role_weight = weights.user  # default to user weight for unknown roles
+        raise ValueError(f"Unknown attributed_role: {attributed_role!r}. Expected one of: user, partner, opponent_1, opponent_2")
 
     final_score = raw_score * role_weight
     return min(final_score, 1.0)

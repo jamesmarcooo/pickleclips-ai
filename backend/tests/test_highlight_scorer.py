@@ -1,5 +1,5 @@
 import pytest
-from app.ml.highlight_scorer import score_highlight, RoleWeights
+from app.ml.highlight_scorer import score_highlight, is_lowlight, RoleWeights
 
 
 def test_user_scoring_point_gets_highest_score():
@@ -35,12 +35,16 @@ def test_partner_play_lower_than_user():
 
 
 def test_lowlight_detection_weak_shot():
-    is_lowlight = score_highlight(
+    # is_lowlight function: shot_quality < 0.3 → True
+    assert is_lowlight(shot_quality=0.15, point_lost_by_error=False) is True
+    assert is_lowlight(shot_quality=0.5, point_lost_by_error=True) is True
+    assert is_lowlight(shot_quality=0.5, point_lost_by_error=False) is False
+    # score_highlight with weak shot quality is also low
+    score = score_highlight(
         point_scored=False,
         point_won_by=None,
         rally_length=2,
         attributed_role="user",
         shot_quality=0.15,
     )
-    # A shot_quality < 0.3 should flag as potential lowlight
-    assert is_lowlight < 0.2
+    assert score < 0.2
