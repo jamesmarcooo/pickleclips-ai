@@ -39,7 +39,9 @@ class ScoreStateMachine:
         Record the outcome of a rally and update state.
         Returns a dict with score_before, score_after, and point_won_by.
         """
-        score_before = self.get_state().copy()
+        if self.is_game_over:
+            raise ValueError("Cannot record a point after the game has ended.")
+        score_before = self.get_state()
 
         if outcome.value == self.serving_team:
             # Serving team wins the rally → score

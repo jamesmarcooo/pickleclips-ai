@@ -19,7 +19,7 @@ class Rally:
 
     @property
     def duration_seconds(self) -> float:
-        return (self.end_frame - self.start_frame) / self.fps
+        return (self.end_frame - self.start_frame + 1) / self.fps
 
 
 def compute_frame_motion(prev: np.ndarray, curr: np.ndarray) -> float:
@@ -55,7 +55,7 @@ def detect_rallies(
     Detect rallies from a per-frame motion signal.
 
     A rally is a continuous region where motion > motion_threshold.
-    Gaps shorter than min_gap_frames are ignored (brief pauses within a rally).
+    Gaps of min_gap_frames or fewer are filled (brief pauses within a rally).
     Rallies shorter than min_rally_frames are discarded (noise).
 
     Returns list of Rally objects sorted by start_frame.
@@ -73,7 +73,7 @@ def detect_rallies(
             while i < len(active) and not active[i]:
                 i += 1
             gap_length = i - gap_start
-            if gap_length < min_gap_frames:
+            if gap_length <= min_gap_frames:
                 for k in range(gap_start, i):
                     active[k] = True
         else:
