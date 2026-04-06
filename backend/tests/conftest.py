@@ -1,6 +1,6 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 from app.main import app
 from app.config import settings
 from app.services.storage import get_r2_client
@@ -49,7 +49,6 @@ async def client(mock_db):
         yield c
 
 
-from unittest.mock import AsyncMock, MagicMock
 from app.database import get_db
 
 @pytest.fixture(autouse=True)

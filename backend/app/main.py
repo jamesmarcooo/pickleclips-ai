@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db, close_db
 from app.routers import videos, highlights
+from app.services.storage import StorageError
 
 
 @asynccontextmanager
@@ -22,6 +23,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(StorageError)
+async def storage_error_handler(request, exc: StorageError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=503, content={"detail": f"Storage unavailable: {exc}"})
 
 app.include_router(videos.router, prefix="/api/v1")
 app.include_router(highlights.router, prefix="/api/v1")

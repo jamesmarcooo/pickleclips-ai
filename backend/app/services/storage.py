@@ -56,14 +56,14 @@ def delete_object(key: str) -> None:
         raise StorageError(f"Failed to delete {key!r}") from exc
 
 
-def generate_multipart_upload_id(key: str) -> str:
+def generate_multipart_upload_id(key: str, content_type: str = "video/mp4") -> str:
     """Initiate S3 multipart upload, return UploadId."""
     client = get_r2_client()
     try:
         response = client.create_multipart_upload(
             Bucket=settings.r2_bucket_name,
             Key=key,
-            ContentType="video/mp4",
+            ContentType=content_type,
         )
         return response["UploadId"]
     except ClientError as exc:

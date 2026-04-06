@@ -37,14 +37,15 @@ async def create_multipart_upload(
     video_id = str(uuid.uuid4())
     key = f"videos/{video_id}/original.mp4"
 
-    # Create video record in DB
+    # Get upload_id from storage first — if this fails, no DB record is created
+    upload_id = storage.generate_multipart_upload_id(key, body.content_type)
+
     await db.execute(
         """INSERT INTO videos (id, user_id, r2_key_original, status)
            VALUES ($1, $2, $3, 'uploading')""",
         video_id, user_id, key,
     )
 
-    upload_id = storage.generate_multipart_upload_id(key)
     return {"video_id": video_id, "upload_id": upload_id, "key": key}
 
 
@@ -52,9 +53,21 @@ async def create_multipart_upload(
 async def sign_multipart_part(
     key: str = Query(...),
     upload_id: str = Query(...),
-    part_number: int = Query(...),
+    part_number: int = Query(..., ge=1, le=10000),
     user_id: str = Depends(get_current_user),
+    db: asyncpg.Connection = Depends(get_db),
 ):
+    # Ownership check: key format is videos/{video_id}/original.mp4
+    parts = key.split("/")
+    if len(parts) < 2:
+        raise HTTPException(status_code=422, detail="Invalid key format")
+    video_id = parts[1]
+    row = await db.fetchrow(
+        "SELECT id FROM videos WHERE id = $1 AND user_id = $2", video_id, user_id
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Video not found")
+
     url = storage.sign_multipart_part(key, upload_id, part_number)
     return {"url": url}
 
@@ -63,7 +76,18 @@ async def sign_multipart_part(
 async def complete_multipart_upload(
     body: CompleteMultipartRequest,
     user_id: str = Depends(get_current_user),
+    db: asyncpg.Connection = Depends(get_db),
 ):
+    parts = body.key.split("/")
+    if len(parts) < 2:
+        raise HTTPException(status_code=422, detail="Invalid key format")
+    video_id = parts[1]
+    row = await db.fetchrow(
+        "SELECT id FROM videos WHERE id = $1 AND user_id = $2", video_id, user_id
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Video not found")
+
     storage.complete_multipart_upload(body.key, body.upload_id, body.parts)
     return {"status": "ok"}
 
@@ -73,7 +97,18 @@ async def abort_multipart_upload(
     key: str = Query(...),
     upload_id: str = Query(...),
     user_id: str = Depends(get_current_user),
+    db: asyncpg.Connection = Depends(get_db),
 ):
+    parts = key.split("/")
+    if len(parts) < 2:
+        raise HTTPException(status_code=422, detail="Invalid key format")
+    video_id = parts[1]
+    row = await db.fetchrow(
+        "SELECT id FROM videos WHERE id = $1 AND user_id = $2", video_id, user_id
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Video not found")
+
     storage.abort_multipart_upload(key, upload_id)
     return {"status": "ok"}
 
@@ -214,4 +249,4 @@ async def tap_identify(
     )
     resume_after_identify.delay(video_id, user_id, seed_bbox)
 
-    return {"status": "processing", "seed_bbox": seed_bbox}
+    return {"status": "processing"}

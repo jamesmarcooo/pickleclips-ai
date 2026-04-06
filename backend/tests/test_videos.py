@@ -18,7 +18,9 @@ async def test_create_multipart_upload(client, test_token):
 
 
 @pytest.mark.asyncio
-async def test_sign_multipart_part(client, test_token):
+async def test_sign_multipart_part(client, test_token, mock_db_connection):
+    from unittest.mock import MagicMock, AsyncMock
+    mock_db_connection.fetchrow = AsyncMock(return_value=MagicMock())  # ownership check passes
     with patch("app.routers.videos.storage.sign_multipart_part", return_value="https://r2.example.com/part"):
         response = await client.get(
             "/api/v1/videos/multipart/sign-part",
