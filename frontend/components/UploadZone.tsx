@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from 'react'
 import Uppy from '@uppy/core'
+// @uppy/aws-s3 v5 (Uppy core v5) replaces the legacy @uppy/aws-s3-multipart package.
+// Multipart uploads are enabled via shouldUseMultipart: true.
 import AwsS3 from '@uppy/aws-s3'
 import Dashboard from '@uppy/dashboard'
 import '@uppy/core/css/style.min.css'
@@ -16,6 +18,10 @@ interface Props {
 export function UploadZone({ token, onUploadComplete }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const videoIdRef = useRef<string | null>(null)
+  // Store callback in ref so useEffect doesn't recreate the Uppy instance when the
+  // parent re-renders and passes a new inline function reference.
+  const onUploadCompleteRef = useRef(onUploadComplete)
+  onUploadCompleteRef.current = onUploadComplete
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -54,6 +60,7 @@ export function UploadZone({ token, onUploadComplete }: Props) {
           },
         )
       },
+      // listParts returns [] — upload resume on page reload is not supported in Phase 1.
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       async listParts(_file: unknown, _opts: { uploadId: string; key: string }) {
         return []
@@ -83,11 +90,13 @@ export function UploadZone({ token, onUploadComplete }: Props) {
       const videoId = videoIdRef.current
       if (!videoId) return
       await api.confirmUpload(token, videoId)
-      onUploadComplete(videoId)
+      onUploadCompleteRef.current(videoId)
     })
 
     return () => uppy.destroy()
-  }, [token, onUploadComplete])
+  // token is the only dependency that should recreate the Uppy instance (auth changed).
+  // onUploadComplete is read via ref to avoid recreation on every parent render.
+  }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return <div ref={containerRef} className="w-full" />
 }
