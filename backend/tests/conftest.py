@@ -47,3 +47,20 @@ def test_user_id():
 async def client(mock_db):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
+
+
+from unittest.mock import AsyncMock, MagicMock
+from app.database import get_db
+
+@pytest.fixture(autouse=True)
+def mock_db_connection(mock_db):
+    """Override get_db dependency to return a mock asyncpg connection."""
+    mock_conn = MagicMock()
+    mock_conn.execute = AsyncMock()
+    mock_conn.fetchrow = AsyncMock(return_value=None)
+    mock_conn.fetch = AsyncMock(return_value=[])
+
+    from app.main import app
+    app.dependency_overrides[get_db] = lambda: mock_conn
+    yield mock_conn
+    app.dependency_overrides.clear()
