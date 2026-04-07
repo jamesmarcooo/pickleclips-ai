@@ -39,3 +39,6 @@ npm-debug.log*
 
 # Superpowers
 .superpowers/
+
+# Git worktrees
+.worktrees/
