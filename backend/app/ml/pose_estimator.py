@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 try:
+    import cv2
+except ImportError:
+    raise ImportError("opencv-python-headless is required: pip install opencv-python-headless")
+
+try:
     import mediapipe as mp
     _mp_pose = mp.solutions.pose
     _mediapipe_available = True
@@ -51,7 +56,6 @@ class PoseEstimator:
 
     def estimate(self, frame_bgr: np.ndarray) -> Optional[PoseKeypoints]:
         """Run pose estimation on a single BGR frame or crop."""
-        import cv2
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         result = self._pose.process(rgb)
         if not result.pose_landmarks:

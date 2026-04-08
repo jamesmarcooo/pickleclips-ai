@@ -11,7 +11,7 @@ def test_pose_estimator_returns_none_on_blank_frame():
     estimator = PoseEstimator()
     frame = make_frame()
     result = estimator.estimate(frame)
-    assert result is None or isinstance(result, PoseKeypoints)
+    assert result is None
 
 
 def test_pose_keypoints_has_required_joints():
