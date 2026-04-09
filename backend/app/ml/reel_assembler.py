@@ -117,13 +117,22 @@ class ReelAssembler:
         self.music_dir = Path(music_dir)
 
     def _apply_slow_mo(self, input_path: str, output_path: str, factor: float) -> None:
-        """Use FFmpeg setpts + atempo to slow down a clip."""
+        """Use FFmpeg setpts + atempo to slow down a clip.
+        atempo supports [0.5, 2.0]; for factors below 0.5, chain two filters.
+        """
         pts_factor = 1.0 / factor
-        audio_tempo = max(0.5, min(factor, 2.0))
+        # Build atempo filter chain — each stage clamped to [0.5, 2.0]
+        if factor >= 0.5:
+            atempo_filter = f"atempo={factor:.3f}"
+        else:
+            # Two-stage: e.g. factor=0.25 → atempo=0.5,atempo=0.5
+            stage = max(0.5, factor ** 0.5)
+            atempo_filter = f"atempo={stage:.3f},atempo={stage:.3f}"
+
         cmd = [
             "ffmpeg", "-y", "-i", input_path,
             "-vf", f"setpts={pts_factor:.3f}*PTS",
-            "-af", f"atempo={audio_tempo:.3f}",
+            "-af", atempo_filter,
             "-c:v", "libx264", "-c:a", "aac", "-preset", "fast",
             output_path,
         ]
@@ -144,9 +153,9 @@ class ReelAssembler:
         elif config.format == "vertical":
             cx_pct = user_center_x
             scale_filter = (
-                f"scale=iw*{target_h}/ih:-1,"
-                f"crop={target_w}:{target_h}:"
-                f"(iw-{target_w})*{cx_pct:.3f}:0"
+                f"scale=-2:{target_h},"
+                f"pad=max(iw\\,{target_w}):{target_h}:(ow-iw)/2:0,"
+                f"crop={target_w}:{target_h}:(iw-{target_w})*{cx_pct:.3f}:0"
             )
         else:  # square
             scale_filter = (
@@ -171,7 +180,8 @@ class ReelAssembler:
         list_file = output_path + ".txt"
         with open(list_file, "w") as f:
             for p in clip_paths:
-                f.write(f"file '{p}'\n")
+                escaped = p.replace("\\", "\\\\").replace("'", "\\'")
+                f.write(f"file '{escaped}'\n")
         try:
             cmd = [
                 "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file,
@@ -222,9 +232,14 @@ class ReelAssembler:
 
             for i, clip in enumerate(clips):
                 current = clip.local_path
-                effective_factor = clip.slow_mo_factor
-                if effective_factor == 1.0 and clip.highlight_score >= _SLOW_MO_SCORE_THRESHOLD:
+                # Explicit slow_mo_factor takes precedence over auto slow-mo.
+                # Only auto-apply slow-mo if factor is at default (1.0) and score is high.
+                if clip.slow_mo_factor != 1.0:
+                    effective_factor = clip.slow_mo_factor
+                elif clip.highlight_score >= _SLOW_MO_SCORE_THRESHOLD:
                     effective_factor = _SLOW_MO_FACTOR
+                else:
+                    effective_factor = 1.0
 
                 if effective_factor != 1.0:
                     slo_path = os.path.join(tmp, f"clip_{i:03d}_slo.mp4")
