@@ -377,6 +377,7 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
                 point_won_by=None,
                 rally_length=rally_record["shot_count"],
                 attributed_role="user",
+                shot_type=shot_result.shot_type,
                 shot_quality=shot_result.quality,
             )
             if rally.duration_seconds > 10:
@@ -452,13 +453,13 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
                             """INSERT INTO highlights (id, video_id, rally_id, attributed_player_role,
                                sub_highlight_type, lowlight_type, point_lost_by_error,
                                start_time_ms, end_time_ms, highlight_score, highlight_score_raw,
-                               shot_quality, point_scored, point_won_by, rally_length, rally_intensity,
+                               shot_type, shot_quality, point_scored, point_won_by, rally_length, rally_intensity,
                                score_source, r2_key_clip)
-                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)""",
+                               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)""",
                             h["id"], h["video_id"], h["rally_id"], h["attributed_player_role"],
                             h["sub_highlight_type"], h["lowlight_type"], h["point_lost_by_error"],
                             h["start_time_ms"], h["end_time_ms"], h["highlight_score"], h["highlight_score_raw"],
-                            h["shot_quality"], h["point_scored"], h["point_won_by"],
+                            h["shot_type"], h["shot_quality"], h["point_scored"], h["point_won_by"],
                             h["rally_length"], h["rally_intensity"], h["score_source"], clip_keys.get(h["id"]),
                         )
                     await conn.execute(
