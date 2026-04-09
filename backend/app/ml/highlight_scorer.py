@@ -10,12 +10,26 @@ class RoleWeights:
     opponent_2: float = 0.3
 
 
+_SHOT_TYPE_MULTIPLIERS: dict[str, float] = {
+    "erne": 1.3,
+    "atp": 1.3,
+    "smash": 1.3,
+    "overhead": 1.1,
+    "lob": 1.05,
+    "drive": 1.0,
+    "speed_up": 1.0,
+    "dink": 0.9,
+    "drop": 0.9,
+}
+
+
 def score_highlight(
     point_scored: bool,
     point_won_by: Literal["user_team", "opponent_team"] | None,
     rally_length: int,
     attributed_role: str,
     shot_quality: float = 0.5,
+    shot_type: str | None = None,
     weights: RoleWeights | None = None,
 ) -> float:
     """
@@ -57,6 +71,8 @@ def score_highlight(
         raise ValueError(f"Unknown attributed_role: {attributed_role!r}. Expected one of: user, partner, opponent_1, opponent_2")
 
     final_score = raw_score * role_weight
+    shot_multiplier = _SHOT_TYPE_MULTIPLIERS.get(shot_type or "", 1.0)
+    final_score = final_score * shot_multiplier
     return min(final_score, 1.0)
 
 

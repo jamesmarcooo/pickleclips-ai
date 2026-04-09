@@ -48,3 +48,56 @@ def test_lowlight_detection_weak_shot():
         shot_quality=0.15,
     )
     assert score < 0.2
+
+
+def test_erne_scored_by_user_gets_higher_score_than_drive():
+    erne_score = score_highlight(
+        point_scored=True,
+        point_won_by="user_team",
+        rally_length=5,
+        attributed_role="user",
+        shot_quality=0.8,
+        shot_type="erne",
+    )
+    drive_score = score_highlight(
+        point_scored=True,
+        point_won_by="user_team",
+        rally_length=5,
+        attributed_role="user",
+        shot_quality=0.8,
+        shot_type="drive",
+    )
+    assert erne_score > drive_score
+
+
+def test_premium_shot_types_increase_score():
+    for premium in ("erne", "smash", "atp"):
+        s = score_highlight(
+            point_scored=False,
+            point_won_by=None,
+            rally_length=4,
+            attributed_role="user",
+            shot_quality=0.7,
+            shot_type=premium,
+        )
+        base = score_highlight(
+            point_scored=False,
+            point_won_by=None,
+            rally_length=4,
+            attributed_role="user",
+            shot_quality=0.7,
+            shot_type="dink",
+        )
+        assert s > base, f"{premium} should score higher than dink"
+
+
+def test_shot_type_none_does_not_crash():
+    s = score_highlight(
+        point_scored=False,
+        point_won_by=None,
+        rally_length=3,
+        attributed_role="user",
+        shot_quality=0.5,
+        shot_type=None,
+    )
+    assert 0.0 <= s <= 1.0
