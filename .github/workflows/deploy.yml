@@ -26,6 +26,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Pre-install numpy (required by torchreid build system)
+        run: pip install "numpy==1.26.4"
+
       - name: Run backend tests
         working-directory: backend
         run: |
