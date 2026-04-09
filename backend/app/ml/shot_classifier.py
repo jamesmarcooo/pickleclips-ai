@@ -19,7 +19,9 @@ from app.ml.ball_detection import BallDetection
 from app.ml.pose_estimator import PoseKeypoints
 
 ShotType = Literal[
-    "drive", "dink", "lob", "erne", "smash", "overhead", "drop", "speed_up", "atp"
+    "drive", "dink", "lob", "erne", "smash", "overhead",
+    # Phase 3 stubs — not returned by rule-based classifier yet:
+    "drop", "speed_up", "atp",
 ]
 
 # Thresholds
@@ -27,7 +29,10 @@ _NET_Y = 0.5          # normalized y-coord of net (centre of frame)
 _SPEED_HIGH = 0.25    # ball displacement per frame above this → fast shot
 _SPEED_LOW = 0.08     # below this → soft contact (dink/drop)
 _LOB_DY = -0.25       # ball rising steeply (y decreasing, origin top-left)
-_SMASH_WRIST_ABOVE_SHOULDER_Y = 0.1  # wrist.y above shoulder.y by this amount
+# Pose keypoints are crop-relative (not full-frame).
+# 0.1 was calibrated for a typical tight-body player crop where wrist
+# visibly above head equals ~10% of crop height. Adjust if crop sizing changes.
+_SMASH_WRIST_ABOVE_SHOULDER_Y = 0.1
 
 
 @dataclass
@@ -117,13 +122,16 @@ def classify_shot(
     speed = _ball_speed(ball_before, ball_after)
 
     # 2. Smash / Overhead
+    # Requires pose — if pose unavailable, overhead cannot be confirmed; falls through to drive.
     if pose is not None and _is_overhead_pose(pose) and dy > 0.1:
         shot_type: ShotType = "smash" if speed > _SPEED_HIGH else "overhead"
         quality = _shot_quality(pose, shot_type, ball_before, ball_after)
         return ShotClassification(shot_type=shot_type, quality=quality)
 
     # 3. Lob
-    if dy < _LOB_DY:
+    # Ball must have been hit from mid-to-back court (y > 0.35) to be a lob.
+    # A steeply-rising ball near the net is more likely a high dink or sensor artifact.
+    if dy < _LOB_DY and ball_before.y > 0.35:
         quality = _shot_quality(pose, "lob", ball_before, ball_after)
         return ShotClassification(shot_type="lob", quality=quality)
 

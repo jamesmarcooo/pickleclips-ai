@@ -32,6 +32,16 @@ def _pose_low() -> PoseKeypoints:
     )
 
 
+def test_classify_overhead_when_speed_low():
+    shot = classify_shot(
+        ball_before=_ball(0.5, 0.3),
+        ball_after=_ball(0.51, 0.45),  # slow descent, speed << _SPEED_HIGH (0.25)
+        pose=_pose_overhead(),
+        player_crossed_centerline=False,
+    )
+    assert shot.shot_type == "overhead"
+
+
 def test_classify_smash_high_wrist_ball_descending():
     shot = classify_shot(
         ball_before=_ball(0.5, 0.3),
