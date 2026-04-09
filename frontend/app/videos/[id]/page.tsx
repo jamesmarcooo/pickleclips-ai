@@ -23,6 +23,9 @@ export default function VideoPage() {
   const [highlights, setHighlights] = useState<object[]>([])
   const [lowlights, setLowlights] = useState<object[]>([])
   const [activeTab, setActiveTab] = useState<Tab>('highlights')
+  const [downloadingZip, setDownloadingZip] = useState(false)
+  const [generatingReels, setGeneratingReels] = useState(false)
+  const [reelsQueued, setReelsQueued] = useState(false)
 
   useEffect(() => {
     const supabase = createClient()
@@ -53,6 +56,35 @@ export default function VideoPage() {
 
   async function onAnalyzed() {
     if (token) await loadClips(token)
+  }
+
+  async function handleDownloadZip() {
+    if (!token) return
+    setDownloadingZip(true)
+    try {
+      const blob = await api.downloadClipsZip(token, videoId)
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `clips_${videoId.slice(0, 8)}.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+    } finally {
+      setDownloadingZip(false)
+    }
+  }
+
+  async function handleGenerateReels() {
+    if (!token) return
+    setGeneratingReels(true)
+    try {
+      await api.generateReels(token, videoId)
+      setReelsQueued(true)
+    } finally {
+      setGeneratingReels(false)
+    }
   }
 
   if (!video || !token) return <div className="p-8 text-gray-400">Loading…</div>
@@ -165,6 +197,23 @@ export default function VideoPage() {
               </Link>
             </div>
           )}
+
+          <div className="flex gap-3 mt-6">
+            <button
+              onClick={handleDownloadZip}
+              disabled={downloadingZip || (video as any)?.status !== 'analyzed'}
+              className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50"
+            >
+              {downloadingZip ? 'Preparing ZIP…' : 'Download ZIP'}
+            </button>
+            <button
+              onClick={handleGenerateReels}
+              disabled={generatingReels || reelsQueued || (video as any)?.status !== 'analyzed'}
+              className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
+            >
+              {reelsQueued ? 'Reels Queued ✓' : generatingReels ? 'Queuing…' : 'Generate Reels'}
+            </button>
+          </div>
         </>
       )}
     </div>

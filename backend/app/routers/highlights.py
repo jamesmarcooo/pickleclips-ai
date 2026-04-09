@@ -117,19 +117,18 @@ async def download_clips_zip(
 
     def generate_zip():
         buf = io.BytesIO()
-        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
             for row in rows:
                 shot_type = row["shot_type"] or "unknown"
-                clip_id = str(row["id"])
-                r2_key = row["r2_key_clip"]
-                filename = f"{shot_type}/{clip_id}.mp4"
+                filename = f"{shot_type}/{str(row['id'])}.mp4"
                 try:
-                    obj = client.get_object(Bucket=settings.r2_bucket_name, Key=r2_key)
+                    obj = client.get_object(Bucket=settings.r2_bucket_name, Key=row["r2_key_clip"])
                     zf.writestr(filename, obj["Body"].read())
                 except Exception:
-                    pass  # skip clips that fail to download
+                    pass  # skip clips that fail to download; do not abort the whole archive
         buf.seek(0)
-        yield from buf
+        while chunk := buf.read(65536):
+            yield chunk
 
     return StreamingResponse(
         generate_zip(),

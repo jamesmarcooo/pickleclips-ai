@@ -47,3 +47,44 @@ async def test_confirm_triggers_pipeline(client, test_token, test_user_id):
         )
     # mock_db_connection returns None for fetchrow → 404 is fine too
     assert response.status_code in (200, 404, 422, 500)
+
+
+async def test_generate_reels_returns_202_when_analyzed(client, test_token, mock_db_connection):
+    import sys
+    from unittest.mock import MagicMock, AsyncMock, patch
+    mock_reel_gen = MagicMock()
+    mock_reel_gen.trigger_auto_generated_reels = MagicMock()
+    with patch.dict(sys.modules, {"app.workers.reel_gen": mock_reel_gen}):
+        mock_db_connection.fetchrow = AsyncMock(
+            return_value={"id": "vid-001", "status": "analyzed"}
+        )
+        res = await client.post(
+            "/api/v1/videos/vid-001/generate-reels",
+            headers={"Authorization": f"Bearer {test_token}"},
+        )
+    assert res.status_code == 202
+    assert res.json()["status"] == "queued"
+    mock_reel_gen.trigger_auto_generated_reels.assert_called_once()
+
+
+async def test_generate_reels_409_when_not_analyzed(client, test_token, mock_db_connection):
+    from unittest.mock import AsyncMock
+    mock_db_connection.fetchrow = AsyncMock(
+        return_value={"id": "vid-002", "status": "processing"}
+    )
+    res = await client.post(
+        "/api/v1/videos/vid-002/generate-reels",
+        headers={"Authorization": f"Bearer {test_token}"},
+    )
+    assert res.status_code == 409
+    assert "not analyzed" in res.json()["detail"]
+
+
+async def test_generate_reels_404_video_not_found(client, test_token, mock_db_connection):
+    from unittest.mock import AsyncMock
+    mock_db_connection.fetchrow = AsyncMock(return_value=None)
+    res = await client.post(
+        "/api/v1/videos/vid-999/generate-reels",
+        headers={"Authorization": f"Bearer {test_token}"},
+    )
+    assert res.status_code == 404

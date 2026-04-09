@@ -141,6 +141,12 @@ def trigger_auto_generated_reels(video_id: str, user_id: str) -> None:
         try:
             reel_ids = {}
             for output_type in _AUTO_GENERATED_TYPES:
+                existing = await conn.fetchrow(
+                    "SELECT id FROM reels WHERE video_id = $1 AND output_type = $2",
+                    video_id, output_type,
+                )
+                if existing:
+                    continue
                 row = await conn.fetchrow(
                     """INSERT INTO reels (user_id, video_id, output_type, format, auto_generated)
                        VALUES ($1, $2, $3, 'horizontal', TRUE)
