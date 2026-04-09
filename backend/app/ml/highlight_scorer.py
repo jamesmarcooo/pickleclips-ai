@@ -31,6 +31,7 @@ def score_highlight(
     shot_quality: float = 0.5,
     shot_type: str | None = None,
     weights: RoleWeights | None = None,
+    shot_type_overrides: dict[str, float] | None = None,
 ) -> float:
     """
     Phase 1 highlight scorer. Uses only signals available without ball/pose models.
@@ -71,7 +72,10 @@ def score_highlight(
         raise ValueError(f"Unknown attributed_role: {attributed_role!r}. Expected one of: user, partner, opponent_1, opponent_2")
 
     final_score = raw_score * role_weight
-    shot_multiplier = _SHOT_TYPE_MULTIPLIERS.get(shot_type or "", 1.0)
+    multipliers = dict(_SHOT_TYPE_MULTIPLIERS)
+    if shot_type_overrides:
+        multipliers.update(shot_type_overrides)
+    shot_multiplier = multipliers.get(shot_type or "", 1.0)
     final_score = final_score * shot_multiplier
     return min(final_score, 1.0)
 

@@ -79,6 +79,13 @@ export const api = {
     return res.blob()
   },
 
+  confirmIdentity: (token: string, videoId: string, confirmed: boolean) =>
+    apiFetch<{ status: string; auto_recognized?: boolean; bboxes?: object[] }>(
+      `/api/v1/videos/${videoId}/confirm-identity`,
+      { method: 'POST', body: JSON.stringify({ confirmed }) },
+      token
+    ),
+
   generateReels: (token: string, videoId: string) =>
     apiFetch<{ status: string; video_id: string }>(
       `/api/v1/videos/${videoId}/generate-reels`,

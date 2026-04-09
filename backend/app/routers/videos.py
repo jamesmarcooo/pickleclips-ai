@@ -26,6 +26,10 @@ class TapIdentifyRequest(BaseModel):
     bbox_index: int  # 0-3, which bounding box the user tapped
 
 
+class ConfirmIdentityRequest(BaseModel):
+    confirmed: bool  # True = accept auto-selected bbox; False = fall back to 4-box tap
+
+
 # ── Multipart upload coordination ─────────────────────────────────────────────
 
 @router.post("/videos/multipart/create")
@@ -275,3 +279,38 @@ async def tap_identify(
     resume_after_identify.delay(video_id, user_id, seed_bbox)
 
     return {"status": "processing"}
+
+
+@router.post("/videos/{video_id}/confirm-identity")
+async def confirm_identity(
+    video_id: str,
+    body: ConfirmIdentityRequest,
+    user_id: str = Depends(get_current_user),
+    db: asyncpg.Connection = Depends(get_db),
+):
+    """
+    For the 'confirming' flow: user accepts the auto-selected candidate or falls back to manual tap.
+    """
+    from app.workers.ingest import resume_after_identify
+
+    video = await db.fetchrow(
+        "SELECT id, status, metadata FROM videos WHERE id = $1 AND user_id = $2",
+        video_id, user_id,
+    )
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video["status"] != "confirming":
+        raise HTTPException(status_code=409, detail="Video is not waiting for identity confirmation")
+
+    meta = video["metadata"] or {}
+    auto_bbox = meta.get("auto_candidate_bbox")
+    bboxes = meta.get("player_bboxes", [])
+
+    if body.confirmed and auto_bbox:
+        await db.execute("UPDATE videos SET status = 'processing' WHERE id = $1", video_id)
+        resume_after_identify.delay(video_id, user_id, auto_bbox)
+        return {"status": "processing", "auto_recognized": True}
+    else:
+        # Fall back to full 4-box tap flow
+        await db.execute("UPDATE videos SET status = 'identifying' WHERE id = $1", video_id)
+        return {"status": "identifying", "bboxes": bboxes}

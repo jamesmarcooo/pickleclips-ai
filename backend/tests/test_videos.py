@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock, MagicMock
 
 
 @pytest.mark.asyncio
@@ -85,6 +85,66 @@ async def test_generate_reels_404_video_not_found(client, test_token, mock_db_co
     mock_db_connection.fetchrow = AsyncMock(return_value=None)
     res = await client.post(
         "/api/v1/videos/vid-999/generate-reels",
+        headers={"Authorization": f"Bearer {test_token}"},
+    )
+    assert res.status_code == 404
+
+
+async def test_confirm_identity_accepted(client, test_token, mock_db_connection):
+    import sys
+    mock_ingest = MagicMock()
+    mock_ingest.resume_after_identify = MagicMock()
+    mock_db_connection.fetchrow = AsyncMock(return_value={
+        "id": "vid-001", "status": "confirming",
+        "metadata": {"auto_candidate_bbox": {"x": 100, "y": 50, "w": 80, "h": 200},
+                     "player_bboxes": []},
+    })
+    mock_db_connection.execute = AsyncMock()
+    with patch.dict(sys.modules, {"app.workers.ingest": mock_ingest}):
+        res = await client.post(
+            "/api/v1/videos/vid-001/confirm-identity",
+            json={"confirmed": True},
+            headers={"Authorization": f"Bearer {test_token}"},
+        )
+    assert res.status_code == 200
+    assert res.json()["status"] == "processing"
+    assert res.json()["auto_recognized"] is True
+
+
+async def test_confirm_identity_rejected_falls_back(client, test_token, mock_db_connection):
+    mock_db_connection.fetchrow = AsyncMock(return_value={
+        "id": "vid-002", "status": "confirming",
+        "metadata": {"auto_candidate_bbox": {"x": 0, "y": 0, "w": 50, "h": 100},
+                     "player_bboxes": [{"x": 0, "y": 0, "w": 50, "h": 100}]},
+    })
+    mock_db_connection.execute = AsyncMock()
+    res = await client.post(
+        "/api/v1/videos/vid-002/confirm-identity",
+        json={"confirmed": False},
+        headers={"Authorization": f"Bearer {test_token}"},
+    )
+    assert res.status_code == 200
+    assert res.json()["status"] == "identifying"
+    assert isinstance(res.json()["bboxes"], list)
+
+
+async def test_confirm_identity_409_wrong_status(client, test_token, mock_db_connection):
+    mock_db_connection.fetchrow = AsyncMock(return_value={
+        "id": "vid-003", "status": "identifying", "metadata": {}
+    })
+    res = await client.post(
+        "/api/v1/videos/vid-003/confirm-identity",
+        json={"confirmed": True},
+        headers={"Authorization": f"Bearer {test_token}"},
+    )
+    assert res.status_code == 409
+
+
+async def test_confirm_identity_404_not_found(client, test_token, mock_db_connection):
+    mock_db_connection.fetchrow = AsyncMock(return_value=None)
+    res = await client.post(
+        "/api/v1/videos/vid-999/confirm-identity",
+        json={"confirmed": True},
         headers={"Authorization": f"Bearer {test_token}"},
     )
     assert res.status_code == 404

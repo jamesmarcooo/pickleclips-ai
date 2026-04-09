@@ -172,6 +172,39 @@ def ingest_video(self, video_id: str, user_id: str):
             for bbox in bboxes
         ]
 
+        # 5b. Check for persistent player profile → route to correct identification flow
+        async def get_profile():
+            conn = await asyncpg.connect(settings.database_url)
+            try:
+                return await conn.fetchrow(
+                    """SELECT appearance_embedding, embedding_confidence, uploads_contributing
+                       FROM player_profiles WHERE user_id = $1""",
+                    user_id,
+                )
+            finally:
+                await conn.close()
+
+        profile = asyncio.run(get_profile())
+        auto_status = "identifying"
+        auto_seed_bbox = None
+
+        if profile and (profile["uploads_contributing"] or 0) >= PROFILE_MIN_UPLOADS and bboxes:
+            from app.ml.reid_tracking import extract_embedding, cosine_similarity
+            stored_embedding = np.array(profile["appearance_embedding"])
+            best_sim, best_bbox = -1.0, None
+            for bbox in bboxes:
+                emb = extract_embedding(seed_frame, bbox)
+                sim = cosine_similarity(stored_embedding, emb)
+                if sim > best_sim:
+                    best_sim, best_bbox = sim, bbox
+
+            if best_sim > 0.85:
+                auto_status = "processing"
+                auto_seed_bbox = best_bbox
+            elif best_sim >= 0.60:
+                auto_status = "confirming"
+                auto_seed_bbox = best_bbox  # store candidate for confirmation prompt
+
         # 6. Upload seed frame to R2
         seed_frame_key = f"videos/{video_id}/seed_frame.jpg"
         s3.upload_file(seed_frame_path, settings.r2_bucket_name, seed_frame_key)
@@ -180,28 +213,32 @@ def ingest_video(self, video_id: str, user_id: str):
         processed_key = f"videos/{video_id}/processed_1080p.mp4"
         s3.upload_file(processed_path, settings.r2_bucket_name, processed_key)
 
-        # 8. Update DB: status → identifying
+        # 8. Update DB: status → auto_status (identifying / confirming / processing)
         async def save_results():
             conn = await asyncpg.connect(settings.database_url)
             try:
                 deadline = datetime.now(timezone.utc) + timedelta(hours=24)
+                metadata_payload = {"seed_frame_key": seed_frame_key, "player_bboxes": bboxes}
+                if auto_seed_bbox is not None:
+                    metadata_payload["auto_candidate_bbox"] = auto_seed_bbox
                 await conn.execute(
                     """UPDATE videos SET
-                        status = 'identifying',
-                        r2_key_processed = $1,
+                        status = $1,
+                        r2_key_processed = $2,
                         identify_started_at = NOW(),
-                        cleanup_after = $2,
-                        metadata = metadata || $3::jsonb
-                       WHERE id = $4""",
-                    processed_key,
-                    deadline,
-                    json.dumps({"seed_frame_key": seed_frame_key, "player_bboxes": bboxes}),
-                    video_id,
+                        cleanup_after = $3,
+                        metadata = metadata || $4::jsonb
+                       WHERE id = $5""",
+                    auto_status, processed_key, deadline,
+                    json.dumps(metadata_payload), video_id,
                 )
             finally:
                 await conn.close()
 
         asyncio.run(save_results())
+
+        if auto_status == "processing" and auto_seed_bbox is not None:
+            run_ai_pipeline.delay(video_id, user_id, auto_seed_bbox)
 
     except Exception as exc:
         if self.request.retries >= self.max_retries:
@@ -264,6 +301,19 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
         if video is None:
             raise ValueError(f"No video record found for {video_id}")
 
+        async def get_user_prefs():
+            conn = await asyncpg.connect(settings.database_url)
+            try:
+                row = await conn.fetchrow(
+                    "SELECT highlight_preferences FROM users WHERE id = $1", user_id
+                )
+                return dict(row["highlight_preferences"] or {}) if row else {}
+            finally:
+                await conn.close()
+
+        user_prefs = asyncio.run(get_user_prefs())
+        user_shot_weights = user_prefs.get("shot_type_weights", {})
+
         s3 = get_r2_boto_client()
 
         # Download 1080p working copy for frame extraction
@@ -316,6 +366,14 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
             frame_poses.append(pose)
         if pose_estimator is not None:
             pose_estimator.close()
+
+        # Audio analysis (optional — gracefully skipped if extraction fails)
+        from app.ml.audio_analyzer import AudioAnalyzer
+        audio_path = str(tmp_dir / "audio.wav")
+        audio_analyzer = AudioAnalyzer()
+        audio_scores: list[float] = []
+        if audio_analyzer.extract_audio(processed_path, audio_path):
+            audio_scores = audio_analyzer.analyze(audio_path, fps=2)
 
         # Build motion signal + detect rallies
         motion_signal = build_motion_signal(frames)
@@ -379,7 +437,10 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
                 attributed_role="user",
                 shot_type=shot_result.shot_type,
                 shot_quality=shot_result.quality,
+                shot_type_overrides=user_shot_weights,
             )
+            audio_boost = audio_scores[mid_frame] * 0.1 if mid_frame < len(audio_scores) else 0.0
+            raw_score = min(raw_score + audio_boost, 1.0)
             if rally.duration_seconds > 10:
                 raw_score = min(raw_score * 1.3, 1.0)
 
@@ -470,9 +531,65 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
 
         asyncio.run(save_to_db())
 
+        # Update persistent player profile with this video's user embeddings
+        _upsert_player_profile(video_id, user_id, labeled_frames)
+
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             update_video_status(video_id, "failed")
         raise self.retry(exc=exc, countdown=120)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ── Player profile ─────────────────────────────────────────────────────────────
+
+PROFILE_MIN_UPLOADS = 3  # uploads needed before auto-recognition is attempted
+
+
+def _upsert_player_profile(video_id: str, user_id: str, labeled_frames: list) -> None:
+    """Average user embeddings across all labeled frames and upsert into player_profiles."""
+    import numpy as np
+
+    user_embeddings = []
+    confidences = []
+    for frame_detections in labeled_frames:
+        for det in frame_detections:
+            if det.get("role") == "user" and "embedding" in det:
+                user_embeddings.append(det["embedding"])
+                confidences.append(float(det.get("reid_conf", 0.0)))
+
+    if not user_embeddings:
+        return
+
+    avg_embedding = np.mean(user_embeddings, axis=0)
+    norm = np.linalg.norm(avg_embedding)
+    avg_embedding = avg_embedding / norm if norm > 0 else avg_embedding
+    avg_confidence = float(np.mean(confidences))
+
+    async def _upsert():
+        conn = await asyncpg.connect(settings.database_url)
+        try:
+            await conn.execute(
+                """INSERT INTO player_profiles
+                       (user_id, appearance_embedding, embedding_confidence, uploads_contributing)
+                   VALUES ($1, $2::vector, $3, 1)
+                   ON CONFLICT (user_id) DO UPDATE SET
+                     appearance_embedding = (
+                         player_profiles.appearance_embedding
+                             * player_profiles.uploads_contributing::float
+                         + EXCLUDED.appearance_embedding
+                     ) / (player_profiles.uploads_contributing + 1)::float,
+                     embedding_confidence = (
+                         player_profiles.embedding_confidence
+                             * player_profiles.uploads_contributing::float
+                         + EXCLUDED.embedding_confidence
+                     ) / (player_profiles.uploads_contributing + 1)::float,
+                     uploads_contributing = player_profiles.uploads_contributing + 1,
+                     updated_at = NOW()""",
+                user_id, avg_embedding.tolist(), avg_confidence,
+            )
+        finally:
+            await conn.close()
+
+    asyncio.run(_upsert())

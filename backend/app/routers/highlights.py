@@ -1,4 +1,5 @@
 import io
+import json
 import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,6 +14,26 @@ from app.services.storage import generate_download_url, get_r2_client
 
 class HighlightFeedbackBody(BaseModel):
     user_feedback: str | None = None
+
+
+async def _update_user_preferences(
+    db: asyncpg.Connection, user_id: str, shot_type: str, feedback: str
+) -> None:
+    """Adjust shot_type_weights in users.highlight_preferences based on clip feedback."""
+    row = await db.fetchrow(
+        "SELECT highlight_preferences FROM users WHERE id = $1", user_id
+    )
+    prefs = dict(row["highlight_preferences"] or {}) if row else {}
+    weights = prefs.get("shot_type_weights", {})
+    current = float(weights.get(shot_type, 1.0))
+    delta = 0.05 if feedback == "liked" else -0.05
+    weights[shot_type] = round(max(0.3, min(2.0, current + delta)), 4)
+    prefs["shot_type_weights"] = weights
+    prefs[f"{feedback}_count"] = prefs.get(f"{feedback}_count", 0) + 1
+    await db.execute(
+        "UPDATE users SET highlight_preferences = $1::jsonb WHERE id = $2",
+        json.dumps(prefs), user_id,
+    )
 
 
 # Routes are mounted with /api/v1 prefix in main.py
@@ -158,4 +179,13 @@ async def update_highlight_feedback(
     )
     if not result:
         raise HTTPException(status_code=404, detail="Highlight not found")
+
+    # Update user shot-type preferences based on feedback
+    if feedback is not None:
+        shot_row = await db.fetchrow(
+            "SELECT shot_type FROM highlights WHERE id = $1", highlight_id
+        )
+        if shot_row and shot_row["shot_type"]:
+            await _update_user_preferences(db, user_id, shot_row["shot_type"], feedback)
+
     return {"status": "updated"}

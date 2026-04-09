@@ -104,6 +104,14 @@ def smart_crop_frame(
     return frame
 
 
+def _vertical_crop_filter(user_center_x: float = 0.5) -> str:
+    frame_w, frame_h = 1920, 1080
+    crop_w = int(frame_h * 9 / 16)  # 607 px
+    user_x_px = int(user_center_x * frame_w)
+    x_offset = max(0, min(frame_w - crop_w, user_x_px - crop_w // 2))
+    return f"crop={crop_w}:{frame_h}:{x_offset}:0,scale=1080:1920"
+
+
 class ReelAssembler:
     """
     Assembles highlight clips into a reel video via FFmpeg subprocesses.
@@ -151,12 +159,7 @@ class ReelAssembler:
                 f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2"
             )
         elif config.format == "vertical":
-            cx_pct = user_center_x
-            scale_filter = (
-                f"scale=-2:{target_h},"
-                f"pad=max(iw\\,{target_w}):{target_h}:(ow-iw)/2:0,"
-                f"crop={target_w}:{target_h}:(iw-{target_w})*{cx_pct:.3f}:0"
-            )
+            scale_filter = _vertical_crop_filter(user_center_x)
         else:  # square
             scale_filter = (
                 f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
