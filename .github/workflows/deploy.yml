@@ -7,13 +7,13 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Skips entirely until EC2_HOST secret is configured in repo settings
-    if: ${{ secrets.EC2_HOST != '' }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Deploy to EC2
+        # Skips until EC2_HOST secret is configured in repo settings
+        if: ${{ secrets.EC2_HOST != '' }}
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.EC2_HOST }}
