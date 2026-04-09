@@ -29,8 +29,12 @@ jobs:
       - name: Run backend tests
         working-directory: backend
         run: |
-          pip install "numpy==1.26.4" "Cython"
-          pip install --no-build-isolation -r requirements.txt
+          # torchreid's setup.py imports the full package to read its version,
+          # pulling in the entire dependency chain before pip can satisfy them.
+          # Fix: install all other deps first, then torchreid with --no-build-isolation
+          # so its runtime deps are already present when setup.py executes.
+          grep -v "torchreid" requirements.txt | pip install -r /dev/stdin
+          pip install --no-build-isolation "torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git@master"
           pytest tests/ -v --ignore=tests/test_person_detection.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -53,8 +57,8 @@ jobs:
             cd /home/ubuntu/pickleclips
             git pull origin main
             cd backend
-            pip install "numpy==1.26.4" "Cython"
-            pip install --no-build-isolation -r requirements.txt
+            grep -v "torchreid" requirements.txt | pip install -r /dev/stdin
+            pip install --no-build-isolation "torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git@master"
             sudo systemctl restart pickleclips-api
             sudo systemctl restart pickleclips-worker
             sudo systemctl restart pickleclips-beat
