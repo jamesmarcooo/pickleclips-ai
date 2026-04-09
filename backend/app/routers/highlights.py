@@ -1,10 +1,15 @@
+import io
+import zipfile
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import asyncpg
 
 from app.auth import get_current_user
+from app.config import settings
 from app.database import get_db
-from app.services.storage import generate_download_url
+from app.services.storage import generate_download_url, get_r2_client
 
 class HighlightFeedbackBody(BaseModel):
     user_feedback: str | None = None
@@ -80,6 +85,57 @@ async def get_clip_download_url(
 
     url = generate_download_url(row["r2_key_clip"], expires_in=3600)
     return {"download_url": url}
+
+
+@router.get("/videos/{video_id}/clips/download-zip")
+async def download_clips_zip(
+    video_id: str,
+    user_id: str = Depends(get_current_user),
+    db: asyncpg.Connection = Depends(get_db),
+):
+    """
+    Stream a ZIP archive of all extracted clips for a video.
+    Clips are organized into subfolders by shot_type (e.g. drive/, dink/, erne/).
+    """
+    video = await db.fetchrow(
+        "SELECT id FROM videos WHERE id = $1 AND user_id = $2", video_id, user_id
+    )
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    rows = await db.fetch(
+        """SELECT id, shot_type, r2_key_clip
+           FROM highlights
+           WHERE video_id = $1 AND r2_key_clip IS NOT NULL
+           ORDER BY highlight_score DESC""",
+        video_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=409, detail="No clips available yet")
+
+    client = get_r2_client()
+
+    def generate_zip():
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for row in rows:
+                shot_type = row["shot_type"] or "unknown"
+                clip_id = str(row["id"])
+                r2_key = row["r2_key_clip"]
+                filename = f"{shot_type}/{clip_id}.mp4"
+                try:
+                    obj = client.get_object(Bucket=settings.r2_bucket_name, Key=r2_key)
+                    zf.writestr(filename, obj["Body"].read())
+                except Exception:
+                    pass  # skip clips that fail to download
+        buf.seek(0)
+        yield from buf
+
+    return StreamingResponse(
+        generate_zip(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=clips_{video_id[:8]}.zip"},
+    )
 
 
 @router.patch("/highlights/{highlight_id}")

@@ -68,6 +68,24 @@ export const api = {
       body: JSON.stringify({ user_feedback: feedback }),
     }, token),
 
+  downloadClipsZip: async (token: string, videoId: string): Promise<Blob> => {
+    const res = await fetch(`${API_BASE}/api/v1/videos/${videoId}/clips/download-zip`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
+      throw new Error(err.detail || `HTTP ${res.status}`)
+    }
+    return res.blob()
+  },
+
+  generateReels: (token: string, videoId: string) =>
+    apiFetch<{ status: string; video_id: string }>(
+      `/api/v1/videos/${videoId}/generate-reels`,
+      { method: 'POST' },
+      token
+    ),
+
   listReels: (token: string, videoId: string) =>
     apiFetch<object[]>(`/api/v1/videos/${videoId}/reels`, {}, token),
 

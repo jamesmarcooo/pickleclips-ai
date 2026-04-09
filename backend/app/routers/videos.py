@@ -166,6 +166,31 @@ async def get_video(
     return dict(row)
 
 
+@router.post("/videos/{video_id}/generate-reels", status_code=202)
+async def generate_reels(
+    video_id: str,
+    user_id: str = Depends(get_current_user),
+    db: asyncpg.Connection = Depends(get_db),
+):
+    """
+    Trigger auto-generation of the standard reel set for an analyzed video.
+    Returns immediately — reel generation runs asynchronously.
+    Idempotent: skips reel types that already exist for this video.
+    """
+    from app.workers.reel_gen import trigger_auto_generated_reels
+
+    video = await db.fetchrow(
+        "SELECT id, status FROM videos WHERE id = $1 AND user_id = $2", video_id, user_id
+    )
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video["status"] != "analyzed":
+        raise HTTPException(status_code=409, detail=f"Video is not analyzed yet (status: {video['status']})")
+
+    trigger_auto_generated_reels(video_id=video_id, user_id=user_id)
+    return {"status": "queued", "video_id": video_id}
+
+
 @router.delete("/videos/{video_id}")
 async def delete_video(
     video_id: str,

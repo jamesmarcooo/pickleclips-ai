@@ -470,10 +470,6 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
 
         asyncio.run(save_to_db())
 
-        # Trigger Phase 2 auto-generated reels
-        from app.workers.reel_gen import trigger_auto_generated_reels
-        trigger_auto_generated_reels(video_id=video_id, user_id=user_id)
-
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             update_video_status(video_id, "failed")
