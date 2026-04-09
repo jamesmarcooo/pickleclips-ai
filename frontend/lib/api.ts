@@ -58,4 +58,33 @@ export const api = {
 
   getClipDownloadUrl: (token: string, highlightId: string) =>
     apiFetch<{ download_url: string }>(`/api/v1/highlights/${highlightId}/download`, {}, token),
+
+  listLowlights: (token: string, videoId: string) =>
+    apiFetch<object[]>(`/api/v1/videos/${videoId}/lowlights`, {}, token),
+
+  updateHighlightFeedback: (token: string, highlightId: string, feedback: 'liked' | 'disliked' | null) =>
+    apiFetch(`/api/v1/highlights/${highlightId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ user_feedback: feedback }),
+    }, token),
+
+  listReels: (token: string, videoId: string) =>
+    apiFetch<object[]>(`/api/v1/videos/${videoId}/reels`, {}, token),
+
+  createReel: (token: string, videoId: string, outputType: string, format: string = 'horizontal') =>
+    apiFetch<{ id: string; status: string; output_type: string }>(
+      '/api/v1/reels',
+      { method: 'POST', body: JSON.stringify({ video_id: videoId, output_type: outputType, format }) },
+      token
+    ),
+
+  getReel: (token: string, reelId: string) =>
+    apiFetch<object>(`/api/v1/reels/${reelId}`, {}, token),
+
+  shareReel: (token: string, reelId: string) =>
+    apiFetch<{ share_url: string; share_token: string }>(
+      `/api/v1/reels/${reelId}/share`,
+      { method: 'POST' },
+      token
+    ),
 }
