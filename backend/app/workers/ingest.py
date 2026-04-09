@@ -18,6 +18,14 @@ from app.config import settings
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _mediapipe_available() -> bool:
+    try:
+        import mediapipe  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def update_video_status(video_id: str, status: str, metadata_update: dict = None) -> None:
     """Sync DB update (run in Celery worker thread)."""
     async def _update():
@@ -233,6 +241,7 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
     from app.ml.highlight_scorer import score_highlight, is_lowlight
     from app.ml.clip_extractor import ClipSpec, extract_clips_batch
     from app.ml.person_detection import detect_players
+    from app.ml.shot_classifier import classify_shot
 
     tmp_dir = Path(f"/tmp/pickleclips/{video_id}")
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -278,6 +287,36 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
         # Track user across all frames
         labeled_frames = track_user_across_frames(frames, all_detections, seed_embedding)
 
+        # ── Phase 2: Ball Detection ─────────────────────────────────────────
+        from app.ml.ball_detection import BallDetector, ball_trajectory_from_detections
+        ball_detector = BallDetector(weights_path=settings.tracknetv2_weights_path)
+        raw_ball_detections = ball_detector.detect_sequence(frames)
+        ball_detections = ball_trajectory_from_detections(raw_ball_detections, fps=2)
+
+        # ── Phase 2: Pose Estimation ────────────────────────────────────────
+        from app.ml.pose_estimator import PoseEstimator
+        pose_estimator = PoseEstimator() if _mediapipe_available() else None
+        frame_poses = []
+        for frame_i, (frame, labeled) in enumerate(zip(frames, labeled_frames)):
+            if pose_estimator is None:
+                frame_poses.append(None)
+                continue
+            user_bbox = next(
+                (d["bbox"] for d in labeled if d.get("role") == "user"), None
+            )
+            if user_bbox:
+                x, y, w, h = (
+                    int(user_bbox.get("x", 0)), int(user_bbox.get("y", 0)),
+                    int(user_bbox.get("w", 100)), int(user_bbox.get("h", 100)),
+                )
+                crop = frame[max(0, y):y + h, max(0, x):x + w]
+                pose = pose_estimator.estimate(crop) if crop.size > 0 else None
+            else:
+                pose = None
+            frame_poses.append(pose)
+        if pose_estimator is not None:
+            pose_estimator.close()
+
         # Build motion signal + detect rallies
         motion_signal = build_motion_signal(frames)
         rallies: list[Rally] = detect_rallies(motion_signal, fps=2)
@@ -303,19 +342,47 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
             }
             rally_records.append(rally_record)
 
-            shot_quality = 0.5
+            # Get ball and pose at rally midpoint for shot classification
+            fps = 2
+            rally_frame_start = max(0, rally.start_time_ms * fps // 1000)
+            rally_frame_end = min(len(frames) - 1, rally.end_time_ms * fps // 1000)
+            mid_frame = (rally_frame_start + rally_frame_end) // 2
+
+            ball_before = ball_detections[mid_frame - 1] if mid_frame > 0 else None
+            ball_after = ball_detections[mid_frame + 1] if mid_frame + 1 < len(ball_detections) else None
+            pose = frame_poses[mid_frame] if mid_frame < len(frame_poses) else None
+
+            user_positions_x = [
+                d["bbox"].get("x", 0) / max(frames[0].shape[1], 1)
+                for fi in range(rally_frame_start, rally_frame_end + 1)
+                if fi < len(labeled_frames)
+                for d in labeled_frames[fi]
+                if d.get("role") == "user" and "bbox" in d
+            ]
+            player_crossed = (
+                len(user_positions_x) > 1
+                and max(user_positions_x) > 0.5
+                and min(user_positions_x) < 0.4
+            )
+
+            shot_result = classify_shot(
+                ball_before=ball_before,
+                ball_after=ball_after,
+                pose=pose,
+                player_crossed_centerline=player_crossed,
+            )
+
             raw_score = score_highlight(
                 point_scored=False,
                 point_won_by=None,
                 rally_length=rally_record["shot_count"],
                 attributed_role="user",
-                shot_quality=shot_quality,
+                shot_quality=shot_result.quality,
             )
             if rally.duration_seconds > 10:
                 raw_score = min(raw_score * 1.3, 1.0)
 
-            # Phase 1: no shot classifier, so is_lowlight is driven purely by quality threshold
-            lowlight = is_lowlight(shot_quality=shot_quality, point_lost_by_error=False)
+            lowlight = is_lowlight(shot_quality=shot_result.quality, point_lost_by_error=False)
             sub_type = "lowlight" if lowlight else "point_scored"
 
             clip_start_ms = max(0, rally.start_time_ms - 1000)
@@ -333,8 +400,8 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
                 "end_time_ms": clip_end_ms,
                 "highlight_score": raw_score,
                 "highlight_score_raw": raw_score,
-                "shot_type": None,
-                "shot_quality": shot_quality,
+                "shot_type": shot_result.shot_type,
+                "shot_quality": shot_result.quality,
                 "point_scored": False,
                 "point_won_by": None,
                 "rally_length": rally_record["shot_count"],
