@@ -34,6 +34,7 @@ jobs:
           # Fix: install all other deps first, then torchreid with --no-build-isolation
           # so its runtime deps are already present when setup.py executes.
           grep -v "torchreid" requirements.txt | pip install -r /dev/stdin
+          pip install "Cython"
           pip install --no-build-isolation "torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git@master"
           pytest tests/ -v --ignore=tests/test_person_detection.py
         env:
