@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     r2_bucket_name: str
     redis_url: str = "redis://localhost:6379/0"
     environment: str = "development"
+    app_base_url: str = "http://localhost:3000"
     tracknetv2_weights_path: str | None = None  # path to TrackNetV2 weights on GPU instance
 
     model_config = SettingsConfigDict(env_file=".env")
