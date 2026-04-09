@@ -11,9 +11,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check EC2 configured
+        id: ec2
+        run: |
+          if [ -n "$EC2_HOST" ]; then
+            echo "ready=true" >> $GITHUB_OUTPUT
+          else
+            echo "ready=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+
       - name: Deploy to EC2
-        # Skips until EC2_HOST secret is configured in repo settings
-        if: ${{ secrets.EC2_HOST != '' }}
+        if: steps.ec2.outputs.ready == 'true'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.EC2_HOST }}
