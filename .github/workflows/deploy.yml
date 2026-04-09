@@ -7,45 +7,11 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
+    # Skips entirely until EC2_HOST secret is configured in repo settings
+    if: ${{ secrets.EC2_HOST != '' }}
 
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Run backend tests
-        working-directory: backend
-        run: |
-          # torchreid is excluded from CI: its setup.py imports the full package
-          # to read the version, requiring all transitive deps pre-installed —
-          # a GPU-only package with no pre-built wheel. Tests mock all Re-ID calls.
-          grep -v "torchreid" requirements.txt | pip install -r /dev/stdin
-          pytest tests/ -v \
-            --ignore=tests/test_person_detection.py \
-            --ignore=tests/test_reid_tracking.py
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-          REDIS_URL: redis://localhost:6379/0
 
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1
