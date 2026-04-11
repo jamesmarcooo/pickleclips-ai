@@ -157,7 +157,7 @@ def evaluate(snap: UsageSnapshot) -> UsageSnapshot:
 
         if pct >= BLOCK_THRESHOLD_PCT and is_critical:
             snap.blocks.append(msg)
-        elif pct >= ALERT_THRESHOLD_PCT:
+        if pct >= ALERT_THRESHOLD_PCT:
             snap.alerts.append(msg)
 
     return snap
