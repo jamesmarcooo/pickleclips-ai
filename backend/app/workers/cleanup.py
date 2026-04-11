@@ -4,6 +4,7 @@ import asyncpg
 from app.workers.celery_app import celery
 from app.config import settings
 from app.services.storage import delete_object
+from app.services.usage_guard import fetch_snapshot, evaluate, send_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -68,3 +69,72 @@ def cleanup_stale_jobs() -> dict:
 
     logger.info("Cleanup cancelled %d job(s)", cancelled)
     return {"cancelled": cancelled}
+
+
+# Retention policies: (table, column, days)
+_RETENTION_POLICIES = [
+    ("videos", "r2_key_original", 7),
+    ("videos", "r2_key_processed", 14),
+    ("highlights", "r2_key", 30),
+    ("reels", "r2_key", 60),
+]
+
+
+async def _enforce_r2_lifecycle_async() -> dict:
+    """Delete R2 objects past their retention window and null the DB column."""
+    total_deleted = 0
+
+    for table, col, days in _RETENTION_POLICIES:
+        conn = await asyncpg.connect(settings.database_url)
+        try:
+            rows = await conn.fetch(
+                f"""SELECT id, {col} FROM {table}
+                    WHERE {col} IS NOT NULL
+                    AND created_at < NOW() - INTERVAL '{days} days'
+                    LIMIT 100"""
+            )
+            for row in rows:
+                try:
+                    delete_object(row[col])
+                    await conn.execute(
+                        f"UPDATE {table} SET {col} = NULL WHERE id = $1",
+                        row["id"],
+                    )
+                    total_deleted += 1
+                except Exception as exc:
+                    logger.warning(
+                        "R2 lifecycle: failed to delete %s from %s.%s: %s",
+                        row[col], table, col, exc,
+                    )
+        finally:
+            await conn.close()
+
+    return {"deleted": total_deleted}
+
+
+@celery.task(name="app.workers.cleanup.enforce_r2_lifecycle")
+def enforce_r2_lifecycle() -> dict:
+    """
+    Runs every hour. Deletes R2 objects past their retention window and nulls
+    the corresponding DB column so re-download attempts get a clear 404.
+    Returns dict with count of objects deleted.
+    """
+    return asyncio.run(_enforce_r2_lifecycle_async())
+
+
+async def _check_usage_async() -> dict:
+    """Fetch usage snapshot, evaluate thresholds, and send alerts."""
+    conn = await asyncpg.connect(settings.database_url)
+    try:
+        snap = await fetch_snapshot(conn)
+        snap = await evaluate(snap)
+        await send_alerts(snap)
+        return {"alerts": len(snap.alerts), "blocks": len(snap.blocks)}
+    finally:
+        await conn.close()
+
+
+@celery.task(name="app.workers.cleanup.check_usage_and_cleanup")
+def check_usage_and_cleanup() -> dict:
+    """Runs daily at 8am UTC. Fetches usage snapshot and sends alerts if thresholds exceeded."""
+    return asyncio.run(_check_usage_async())

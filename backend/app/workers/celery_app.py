@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from app.config import settings
 
 celery = Celery(
@@ -24,6 +25,14 @@ celery.conf.update(
         "cleanup-stale-identify-jobs": {
             "task": "app.workers.cleanup.cleanup_stale_jobs",
             "schedule": 3600.0,  # every hour
+        },
+        "enforce-r2-lifecycle": {
+            "task": "app.workers.cleanup.enforce_r2_lifecycle",
+            "schedule": 3600.0,  # every hour
+        },
+        "check-usage-daily": {
+            "task": "app.workers.cleanup.check_usage_and_cleanup",
+            "schedule": crontab(hour=8, minute=0),  # 8am UTC daily
         },
     },
 )
