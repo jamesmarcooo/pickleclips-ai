@@ -1,9 +1,10 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 import asyncpg
 
 from app.auth import get_current_user
+from app.config import ALLOWED_USER_CAP
 from app.database import get_db
 from app.services import storage
 
@@ -38,6 +39,16 @@ async def create_multipart_upload(
     user_id: str = Depends(get_current_user),
     db: asyncpg.Connection = Depends(get_db),
 ):
+    # Enforce friends-only user cap for new (unseen) users
+    exists = await db.fetchval("SELECT 1 FROM users WHERE id = $1", user_id)
+    if not exists:
+        user_count = await db.fetchval("SELECT COUNT(*) FROM users")
+        if user_count >= ALLOWED_USER_CAP:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This instance is limited to invited users only.",
+            )
+
     video_id = str(uuid.uuid4())
     key = f"videos/{video_id}/original.mp4"
 

@@ -1,9 +1,12 @@
 import json
 import asyncio
+import logging
 import shutil
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 import asyncpg
 import boto3
@@ -14,6 +17,7 @@ from botocore.config import Config
 
 from app.workers.celery_app import celery
 from app.config import settings
+from app.services.usage_guard import assert_can_ingest, QuotaExceededError
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -107,6 +111,15 @@ def pick_seed_frame(frames: List[np.ndarray]) -> np.ndarray:
     return frames[mid]
 
 
+async def _check_quota(video_id: str) -> None:
+    """Async helper — connect, assert quota, close. Called via asyncio.run()."""
+    conn = await asyncpg.connect(settings.database_url)
+    try:
+        await assert_can_ingest(conn)
+    finally:
+        await conn.close()
+
+
 # ── Pipeline tasks ─────────────────────────────────────────────────────────────
 
 @celery.task(bind=True, name="app.workers.ingest.ingest_video", max_retries=3)
@@ -119,6 +132,14 @@ def ingest_video(self, video_id: str, user_id: str):
     4. Run YOLOv8n person detection on seed frame
     5. Save bboxes + pause for user tap (status → 'identifying')
     """
+    # Check free tier limits before starting any work
+    try:
+        asyncio.run(_check_quota(video_id))
+    except QuotaExceededError as exc:
+        update_video_status(video_id, "failed", {"error": f"Quota exceeded: {str(exc)}"})
+        logger.error("Ingest blocked by quota guard for video %s: %s", video_id, exc)
+        return  # do not raise — prevents Celery retry loop
+
     from app.ml.person_detection import detect_players
 
     tmp_dir = Path(f"/tmp/pickleclips/{video_id}")
