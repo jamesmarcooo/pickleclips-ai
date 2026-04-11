@@ -20,6 +20,11 @@ from app.config import settings
 from app.services.usage_guard import assert_can_ingest, QuotaExceededError
 
 
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+PROFILE_MIN_UPLOADS = 3  # uploads needed before auto-recognition is attempted
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _mediapipe_available() -> bool:
@@ -111,7 +116,7 @@ def pick_seed_frame(frames: List[np.ndarray]) -> np.ndarray:
     return frames[mid]
 
 
-async def _check_quota(video_id: str) -> None:
+async def _check_quota() -> None:
     """Async helper — connect, assert quota, close. Called via asyncio.run()."""
     conn = await asyncpg.connect(settings.database_url)
     try:
@@ -134,7 +139,7 @@ def ingest_video(self, video_id: str, user_id: str):
     """
     # Check free tier limits before starting any work
     try:
-        asyncio.run(_check_quota(video_id))
+        asyncio.run(_check_quota())
     except QuotaExceededError as exc:
         update_video_status(video_id, "failed", {"error": f"Quota exceeded: {str(exc)}"})
         logger.error("Ingest blocked by quota guard for video %s: %s", video_id, exc)
@@ -564,8 +569,6 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
 
 
 # ── Player profile ─────────────────────────────────────────────────────────────
-
-PROFILE_MIN_UPLOADS = 3  # uploads needed before auto-recognition is attempted
 
 
 def _upsert_player_profile(video_id: str, user_id: str, labeled_frames: list) -> None:
