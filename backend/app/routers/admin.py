@@ -18,11 +18,10 @@ async def get_usage_snapshot(
     Owner-only endpoint: returns current free tier usage across all services.
     Returns alerts and blocks arrays so you can see what's approaching limits.
     """
+    # admin_email stores the owner's Supabase user UUID. If unset, endpoint is disabled.
+    if not settings.admin_email:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     if user_id != settings.admin_email:
-        # admin_email stores the owner's Supabase user ID (UUID), not email
-        # If admin_email is not configured, endpoint is disabled
-        if not settings.admin_email:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner only")
 
     snap = evaluate(await fetch_snapshot(db))
