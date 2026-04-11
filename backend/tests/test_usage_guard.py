@@ -58,7 +58,7 @@ def test_upstash_memory_is_alert_only():
     """upstash_memory_bytes at 95% → alerts non-empty, blocks empty (non-critical field)."""
     snap = _snap_at_pct("upstash_memory_bytes", "upstash_memory_bytes", 0.95)
     evaluate(snap)
-    assert len(snap.alerts) > 0
+    assert any("upstash_memory_bytes" in a for a in snap.alerts), "expected upstash_memory_bytes in alerts"
     assert snap.blocks == []
 
 
