@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db, close_db
-from app.routers import videos, highlights, reels
+from app.routers import videos, highlights, reels, admin
 from app.services.storage import StorageError
 
 
@@ -32,6 +32,7 @@ async def storage_error_handler(request, exc: StorageError):
 app.include_router(videos.router, prefix="/api/v1")
 app.include_router(highlights.router, prefix="/api/v1")
 app.include_router(reels.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
 
 
 @app.get("/health")
