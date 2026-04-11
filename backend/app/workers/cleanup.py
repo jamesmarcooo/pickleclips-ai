@@ -127,7 +127,7 @@ async def _check_usage_async() -> dict:
     conn = await asyncpg.connect(settings.database_url)
     try:
         snap = await fetch_snapshot(conn)
-        snap = await evaluate(snap)
+        snap = evaluate(snap)
         await send_alerts(snap)
         return {"alerts": len(snap.alerts), "blocks": len(snap.blocks)}
     finally:
