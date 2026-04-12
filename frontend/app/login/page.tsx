@@ -8,15 +8,19 @@ import { createClient } from '@/lib/supabase'
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const supabase = createClient()
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
+    setLoading(true)
+    setError(null)
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${window.location.origin}/videos` },
+      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
     })
+    setLoading(false)
     if (error) {
       setError(error.message)
     } else {
@@ -43,11 +47,11 @@ export default function LoginPage() {
           onChange={(e) => setEmail(e.target.value)}
           placeholder="your@email.com"
           required
-          className="w-full border rounded-lg px-4 py-2"
+          className="w-full border rounded-lg px-4 py-2 text-black bg-white"
         />
         {error && <p className="text-red-600 text-sm">{error}</p>}
-        <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-lg">
-          Send magic link
+        <button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-2 rounded-lg disabled:opacity-60">
+          {loading ? 'Sending...' : 'Send magic link'}
         </button>
       </form>
     </div>
