@@ -58,6 +58,7 @@ def mock_db_connection(mock_db):
     mock_conn.execute = AsyncMock()
     mock_conn.fetchrow = AsyncMock(return_value=None)
     mock_conn.fetch = AsyncMock(return_value=[])
+    mock_conn.fetchval = AsyncMock(return_value=None)
 
     from app.main import app
     app.dependency_overrides[get_db] = lambda: mock_conn
