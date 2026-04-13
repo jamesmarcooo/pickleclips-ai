@@ -333,6 +333,22 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
     try:
         update_video_status(video_id, "processing")
 
+        # Guard: if highlights already exist, a previous run completed successfully.
+        # Abort rather than inserting duplicates (happens on Celery retry or double-tap).
+        async def highlights_exist() -> bool:
+            conn = await asyncpg.connect(settings.database_url)
+            try:
+                count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM highlights WHERE video_id = $1", video_id
+                )
+                return (count or 0) > 0
+            finally:
+                await conn.close()
+
+        if asyncio.run(highlights_exist()):
+            logger.info("video=%s pipeline skipped — highlights already exist", video_id)
+            return
+
         async def get_video():
             conn = await asyncpg.connect(settings.database_url)
             try:

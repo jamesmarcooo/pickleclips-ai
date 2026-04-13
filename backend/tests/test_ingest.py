@@ -90,6 +90,33 @@ def test_user_presence_filter_logic_skips_low_presence_rally():
     assert presence_ratio2 >= 0.30, "Expected >=30% presence for this pattern"
 
 
+def test_run_ai_pipeline_skips_when_highlights_exist():
+    """
+    If highlights already exist for video_id, run_ai_pipeline must return
+    without downloading video or inserting more records.
+    The dedup guard is the first asyncio.run call after update_video_status.
+    """
+    call_count = [0]
+
+    def fake_run(coro):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # highlights_exist() → True means highlights already in DB
+            return True
+        raise AssertionError(f"asyncio.run called a second time (call #{call_count[0]}); dedup guard should have returned")
+
+    with patch("app.workers.ingest.asyncio.run", side_effect=fake_run), \
+         patch("app.workers.ingest.update_video_status") as mock_status, \
+         patch("app.workers.ingest.get_r2_boto_client") as mock_s3:
+
+        ingest.run_ai_pipeline("video-id", "user-id", {"x": 0, "y": 0, "w": 50, "h": 100})
+
+    # S3 must not be called — no video download should happen
+    mock_s3.assert_not_called()
+    # Only the initial processing status update should have fired
+    mock_status.assert_called_once_with("video-id", "processing")
+
+
 def test_ingest_quota_gate_blocks_when_over_limit():
     """When quota check raises QuotaExceededError, video is marked failed."""
     with patch("app.workers.ingest.asyncio.run", side_effect=QuotaExceededError("R2 at 95%")), \
