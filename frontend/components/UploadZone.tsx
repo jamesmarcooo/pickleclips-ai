@@ -15,15 +15,16 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 interface Props {
   token: string
   onUploadComplete: (videoId: string) => void
+  onProgress?: (bytesUploaded: number, bytesTotal: number) => void
 }
 
-export function UploadZone({ token, onUploadComplete }: Props) {
+export function UploadZone({ token, onUploadComplete, onProgress }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const videoIdRef = useRef<string | null>(null)
-  // Store callback in ref so useEffect doesn't recreate the Uppy instance when the
-  // parent re-renders and passes a new inline function reference.
   const onUploadCompleteRef = useRef(onUploadComplete)
   onUploadCompleteRef.current = onUploadComplete
+  const onProgressRef = useRef(onProgress)
+  onProgressRef.current = onProgress
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -86,11 +87,28 @@ export function UploadZone({ token, onUploadComplete }: Props) {
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(uppy as any).use(AwsS3, s3Opts)
+    ;(uppy as any).use(AwsS3, {
+      ...s3Opts,
+      chunkSize: 50 * 1024 * 1024, // 50MB chunks → ~63 parts for a 3GB file
+      limit: 3, // max 3 concurrent part uploads
+    })
+
+    uppy.on('upload-progress', (_file, uploadProgress) => {
+      const { bytesUploaded, bytesTotal } = uploadProgress
+      const videoId = videoIdRef.current
+      if (videoId && bytesTotal) {
+        sessionStorage.setItem(
+          `upload_progress_${videoId}`,
+          JSON.stringify({ uploaded: bytesUploaded, total: bytesTotal }),
+        )
+        onProgressRef.current?.(bytesUploaded, bytesTotal)
+      }
+    })
 
     uppy.on('complete', async () => {
       const videoId = videoIdRef.current
       if (!videoId) return
+      sessionStorage.removeItem(`upload_progress_${videoId}`)
       await api.confirmUpload(token, videoId)
       onUploadCompleteRef.current(videoId)
     })

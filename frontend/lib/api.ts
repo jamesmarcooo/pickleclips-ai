@@ -86,6 +86,13 @@ export const api = {
       token
     ),
 
+  retryPipeline: (token: string, videoId: string) =>
+    apiFetch<{ status: string; video_id: string; message?: string }>(
+      `/api/v1/videos/${videoId}/retry`,
+      { method: 'POST' },
+      token
+    ),
+
   generateReels: (token: string, videoId: string) =>
     apiFetch<{ status: string; video_id: string }>(
       `/api/v1/videos/${videoId}/generate-reels`,

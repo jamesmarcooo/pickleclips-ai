@@ -29,6 +29,13 @@ async def storage_error_handler(request, exc: StorageError):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=503, content={"detail": f"Storage unavailable: {exc}"})
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc: Exception):
+    from fastapi.responses import JSONResponse
+    import logging
+    logging.getLogger("app").exception("Unhandled exception: %s", exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 app.include_router(videos.router, prefix="/api/v1")
 app.include_router(highlights.router, prefix="/api/v1")
 app.include_router(reels.router, prefix="/api/v1")

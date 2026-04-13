@@ -53,7 +53,7 @@ async def test_generate_reels_returns_202_when_analyzed(client, test_token, mock
     import sys
     from unittest.mock import MagicMock, AsyncMock, patch
     mock_reel_gen = MagicMock()
-    mock_reel_gen.trigger_auto_generated_reels = MagicMock()
+    mock_reel_gen.trigger_auto_generated_reels = AsyncMock()
     with patch.dict(sys.modules, {"app.workers.reel_gen": mock_reel_gen}):
         mock_db_connection.fetchrow = AsyncMock(
             return_value={"id": "vid-001", "status": "analyzed"}

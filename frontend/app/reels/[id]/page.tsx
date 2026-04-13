@@ -42,8 +42,8 @@ export default function ReelPage() {
   useEffect(() => {
     const supabase = createClient()
     supabase.auth.getSession().then(async ({ data }) => {
-      if (!data.session) return router.push('/login')
-      const t = data.session.access_token
+      const t = localStorage.getItem('dev_token') ?? data.session?.access_token
+      if (!t) return router.push('/login')
       setToken(t)
       const r = await api.getReel(t, reelId)
       const rd = r as ReelDetail

@@ -22,8 +22,8 @@ export default function IdentifyPage() {
   useEffect(() => {
     const supabase = createClient()
     supabase.auth.getSession().then(async ({ data }) => {
-      if (!data.session) return router.push('/login')
-      const t = data.session.access_token
+      const t = localStorage.getItem('dev_token') ?? data.session?.access_token
+      if (!t) return router.push('/login')
       setToken(t)
       try {
         // Try confirming flow first; fall back to identifying
@@ -32,9 +32,12 @@ export default function IdentifyPage() {
           { headers: { Authorization: `Bearer ${t}` } }
         )
         const video = await videoRes.json()
-        if (video.status === 'confirming') {
+        if (['processing', 'analyzed', 'failed', 'timed_out'].includes(video.status)) {
+          // Already past identification — go back to the video page
+          router.replace(`/videos/${videoId}`)
+          return
+        } else if (video.status === 'confirming') {
           setIsConfirming(true)
-          // Reuse the identify frame endpoint to get the seed frame URL
           const result = await api.getIdentifyFrame(t, videoId).catch(() => null)
           if (result) {
             setCandidateFrameUrl(result.frame_url)

@@ -126,39 +126,39 @@ def generate_reel(
         share_token = generate_share_token()
         _db_update_reel(reel_id, "ready", r2_key=r2_key, share_token=share_token)
 
+    except ValueError as exc:
+        # Deterministic failures (e.g. no clips available) — don't retry
+        _db_update_reel(reel_id, "failed")
+        raise
     except Exception as exc:
         _db_update_reel(reel_id, "failed")
         raise self.retry(exc=exc, countdown=60)
 
 
-def trigger_auto_generated_reels(video_id: str, user_id: str) -> None:
+async def trigger_auto_generated_reels(video_id: str, user_id: str) -> None:
     """
-    Called at the end of run_ai_pipeline to queue all 4 auto-generated reel types.
+    Called from the API router (async context) to queue all auto-generated reel types.
     Creates DB rows for each reel type then dispatches Celery tasks.
     """
-    async def _create_reels():
-        conn = await asyncpg.connect(settings.database_url)
-        try:
-            reel_ids = {}
-            for output_type in _AUTO_GENERATED_TYPES:
-                existing = await conn.fetchrow(
-                    "SELECT id FROM reels WHERE video_id = $1 AND output_type = $2",
-                    video_id, output_type,
-                )
-                if existing:
-                    continue
-                row = await conn.fetchrow(
-                    """INSERT INTO reels (user_id, video_id, output_type, format, auto_generated)
-                       VALUES ($1, $2, $3, 'horizontal', TRUE)
-                       RETURNING id""",
-                    user_id, video_id, output_type,
-                )
-                reel_ids[output_type] = str(row["id"])
-            return reel_ids
-        finally:
-            await conn.close()
-
-    reel_ids = asyncio.run(_create_reels())
+    conn = await asyncpg.connect(settings.database_url)
+    try:
+        reel_ids = {}
+        for output_type in _AUTO_GENERATED_TYPES:
+            existing = await conn.fetchrow(
+                "SELECT id FROM reels WHERE video_id = $1 AND output_type = $2",
+                video_id, output_type,
+            )
+            if existing:
+                continue
+            row = await conn.fetchrow(
+                """INSERT INTO reels (user_id, video_id, output_type, format, auto_generated)
+                   VALUES ($1, $2, $3, 'horizontal', TRUE)
+                   RETURNING id""",
+                user_id, video_id, output_type,
+            )
+            reel_ids[output_type] = str(row["id"])
+    finally:
+        await conn.close()
 
     for output_type, reel_id in reel_ids.items():
         generate_reel.delay(
@@ -167,3 +167,8 @@ def trigger_auto_generated_reels(video_id: str, user_id: str) -> None:
             user_id=user_id,
             output_type=output_type,
         )
+
+
+def trigger_auto_generated_reels_sync(video_id: str, user_id: str) -> None:
+    """Sync wrapper — called from Celery worker (no running event loop)."""
+    asyncio.run(trigger_auto_generated_reels(video_id, user_id))

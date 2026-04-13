@@ -47,9 +47,9 @@ def build_motion_signal(frames: list[np.ndarray]) -> list[float]:
 def detect_rallies(
     motion_signal: list[float],
     fps: float = 2.0,
-    motion_threshold: float = 0.1,
-    min_gap_frames: int = 2,
-    min_rally_frames: int = 4,
+    motion_threshold: float = 0.03,
+    min_gap_frames: int = 4,
+    min_rally_frames: int = 2,
 ) -> list[Rally]:
     """
     Detect rallies from a per-frame motion signal.

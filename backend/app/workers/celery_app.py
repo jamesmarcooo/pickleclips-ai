@@ -9,6 +9,7 @@ celery = Celery(
     include=[
         "app.workers.ingest",
         "app.workers.cleanup",
+        "app.workers.reel_gen",
     ],
 )
 

@@ -56,9 +56,9 @@ async def create_multipart_upload(
     upload_id = storage.generate_multipart_upload_id(key, body.content_type)
 
     await db.execute(
-        """INSERT INTO videos (id, user_id, r2_key_original, status)
-           VALUES ($1, $2, $3, 'uploading')""",
-        video_id, user_id, key,
+        """INSERT INTO videos (id, user_id, r2_key_original, original_filename, status)
+           VALUES ($1, $2, $3, $4, 'uploading')""",
+        video_id, user_id, key, body.filename,
     )
 
     return {"video_id": video_id, "upload_id": upload_id, "key": key}
@@ -103,7 +103,12 @@ async def complete_multipart_upload(
     if not row:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    storage.complete_multipart_upload(body.key, body.upload_id, body.parts)
+    # Normalize parts: Uppy sends lowercase keys, boto3 requires ETag + PartNumber
+    normalized_parts = [
+        {"ETag": p.get("ETag") or p.get("etag", ""), "PartNumber": p.get("PartNumber") or p.get("partNumber") or p.get("part_number")}
+        for p in body.parts
+    ]
+    storage.complete_multipart_upload(body.key, body.upload_id, normalized_parts)
     return {"status": "ok"}
 
 
@@ -129,6 +134,37 @@ async def abort_multipart_upload(
 
 
 # ── Video management ──────────────────────────────────────────────────────────
+
+@router.post("/videos/{video_id}/retry")
+async def retry_pipeline(
+    video_id: str,
+    user_id: str = Depends(get_current_user),
+    db: asyncpg.Connection = Depends(get_db),
+):
+    """Re-trigger the AI pipeline for a video stuck in 'processing' or 'failed' state."""
+    import json as _json
+    from app.workers.ingest import run_ai_pipeline, ingest_video
+
+    video = await db.fetchrow(
+        "SELECT id, user_id, status, metadata FROM videos WHERE id = $1", video_id
+    )
+    if not video or str(video["user_id"]) != user_id:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if video["status"] not in ("processing", "failed", "identifying"):
+        raise HTTPException(status_code=409, detail=f"Cannot retry video in '{video['status']}' state")
+
+    raw_meta = video["metadata"]
+    meta = _json.loads(raw_meta) if isinstance(raw_meta, str) else (raw_meta or {})
+    seed_bbox = meta.get("selected_seed_bbox")
+
+    if seed_bbox:
+        await db.execute("UPDATE videos SET status = 'processing' WHERE id = $1", video_id)
+        run_ai_pipeline.delay(video_id, user_id, seed_bbox)
+        return {"status": "processing", "video_id": video_id}
+    else:
+        # No seed bbox stored — need user to re-identify
+        await db.execute("UPDATE videos SET status = 'identifying' WHERE id = $1", video_id)
+        return {"status": "identifying", "video_id": video_id, "message": "Please re-identify yourself in the video"}
 
 @router.post("/videos/{video_id}/confirm")
 async def confirm_upload(
@@ -160,7 +196,7 @@ async def list_videos(
     db: asyncpg.Connection = Depends(get_db),
 ):
     rows = await db.fetch(
-        "SELECT id, status, uploaded_at, duration_seconds, resolution FROM videos "
+        "SELECT id, status, uploaded_at, duration_seconds, resolution, original_filename FROM videos "
         "WHERE user_id = $1 ORDER BY uploaded_at DESC",
         user_id,
     )
@@ -202,7 +238,7 @@ async def generate_reels(
     if video["status"] != "analyzed":
         raise HTTPException(status_code=409, detail=f"Video is not analyzed yet (status: {video['status']})")
 
-    trigger_auto_generated_reels(video_id=video_id, user_id=user_id)
+    await trigger_auto_generated_reels(video_id=video_id, user_id=user_id)
     return {"status": "queued", "video_id": video_id}
 
 
@@ -246,7 +282,12 @@ async def get_identify_frame(
     if video["status"] != "identifying":
         raise HTTPException(status_code=409, detail=f"Video is in '{video['status']}' state, not 'identifying'")
 
-    meta = video["metadata"] or {}
+    import json as _json
+    raw_meta = video["metadata"]
+    if isinstance(raw_meta, str):
+        meta = _json.loads(raw_meta)
+    else:
+        meta = raw_meta or {}
     frame_key = meta.get("seed_frame_key")
     bboxes = meta.get("player_bboxes", [])
 
@@ -276,16 +317,23 @@ async def tap_identify(
     if video["status"] != "identifying":
         raise HTTPException(status_code=409, detail="Video is not waiting for identification")
 
-    meta = video["metadata"] or {}
+    import json as _json
+    raw_meta = video["metadata"]
+    meta = _json.loads(raw_meta) if isinstance(raw_meta, str) else (raw_meta or {})
     bboxes = meta.get("player_bboxes", [])
     if body.bbox_index < 0 or body.bbox_index >= len(bboxes):
         raise HTTPException(status_code=422, detail=f"bbox_index must be 0-{len(bboxes)-1}")
 
     seed_bbox = bboxes[body.bbox_index]
 
+    import json as _json2
     await db.execute(
-        "UPDATE videos SET status = 'processing', identify_started_at = NULL WHERE id = $1",
-        video_id,
+        """UPDATE videos
+           SET status = 'processing',
+               identify_started_at = NULL,
+               metadata = metadata || $2::jsonb
+           WHERE id = $1""",
+        video_id, _json2.dumps({"selected_seed_bbox": seed_bbox}),
     )
     resume_after_identify.delay(video_id, user_id, seed_bbox)
 
@@ -313,7 +361,9 @@ async def confirm_identity(
     if video["status"] != "confirming":
         raise HTTPException(status_code=409, detail="Video is not waiting for identity confirmation")
 
-    meta = video["metadata"] or {}
+    import json as _json
+    raw_meta = video["metadata"]
+    meta = _json.loads(raw_meta) if isinstance(raw_meta, str) else (raw_meta or {})
     auto_bbox = meta.get("auto_candidate_bbox")
     bboxes = meta.get("player_bboxes", [])
 

@@ -11,7 +11,7 @@ import { ProcessingStatus } from '@/components/ProcessingStatus'
 import { ClipCard } from '@/components/ClipCard'
 import { FeedbackButtons } from '@/components/FeedbackButtons'
 
-type Tab = 'highlights' | 'lowlights' | 'reels'
+type Tab = 'highlights' | 'lowlights'
 
 export default function VideoPage() {
   const params = useParams()
@@ -19,22 +19,22 @@ export default function VideoPage() {
   const router = useRouter()
 
   const [token, setToken] = useState<string | null>(null)
-  const [video, setVideo] = useState<{ status: string } | null>(null)
+  const [video, setVideo] = useState<{ status: string; duration_seconds?: number | null } | null>(null)
   const [highlights, setHighlights] = useState<object[]>([])
   const [lowlights, setLowlights] = useState<object[]>([])
   const [activeTab, setActiveTab] = useState<Tab>('highlights')
   const [downloadingZip, setDownloadingZip] = useState(false)
-  const [generatingReels, setGeneratingReels] = useState(false)
-  const [reelsQueued, setReelsQueued] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   useEffect(() => {
     const supabase = createClient()
     supabase.auth.getSession().then(async ({ data }) => {
-      if (!data.session) return router.push('/login')
-      const t = data.session.access_token
+      const t = localStorage.getItem('dev_token') ?? data.session?.access_token
+      if (!t) return router.push('/login')
       setToken(t)
       const v = await api.getVideo(t, videoId)
-      setVideo(v as { status: string })
+      setVideo(v as { status: string; duration_seconds?: number | null })
       if ((v as { status: string }).status === 'analyzed') {
         await loadClips(t)
       }
@@ -60,6 +60,7 @@ export default function VideoPage() {
 
   async function handleDownloadZip() {
     if (!token) return
+    setActionError(null)
     setDownloadingZip(true)
     try {
       const blob = await api.downloadClipsZip(token, videoId)
@@ -71,19 +72,25 @@ export default function VideoPage() {
       a.click()
       document.body.removeChild(a)
       window.URL.revokeObjectURL(url)
+    } catch (e: unknown) {
+      setActionError(e instanceof Error ? e.message : 'Download failed')
     } finally {
       setDownloadingZip(false)
     }
   }
 
-  async function handleGenerateReels() {
+  async function handleRetry() {
     if (!token) return
-    setGeneratingReels(true)
+    setRetrying(true)
     try {
-      await api.generateReels(token, videoId)
-      setReelsQueued(true)
+      const result = await api.retryPipeline(token, videoId)
+      if (result.status === 'identifying') {
+        router.push(`/videos/${videoId}/identify`)
+      } else {
+        setVideo((v) => v ? { ...v, status: 'processing' } : v)
+      }
     } finally {
-      setGeneratingReels(false)
+      setRetrying(false)
     }
   }
 
@@ -92,13 +99,15 @@ export default function VideoPage() {
   const tabs: { id: Tab; label: string; count: number }[] = [
     { id: 'highlights', label: 'Highlights', count: highlights.length },
     { id: 'lowlights', label: 'Points of Improvement', count: lowlights.length },
-    { id: 'reels', label: 'Reels', count: 0 },
   ]
 
   return (
     <div className="max-w-4xl mx-auto p-8">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Your Game</h1>
+        <div className="flex items-center gap-4">
+          <Link href="/videos" className="text-gray-400 hover:text-white text-sm">← Back</Link>
+          <h1 className="text-2xl font-bold">Your Game</h1>
+        </div>
         {video.status === 'analyzed' && (
           <Link
             href={`/videos/${videoId}/reels`}
@@ -112,8 +121,24 @@ export default function VideoPage() {
       <ProcessingStatus
         videoId={videoId}
         initialStatus={video.status}
+        durationSeconds={video.duration_seconds}
         onAnalyzed={onAnalyzed}
       />
+
+      {(video.status === 'failed' || video.status === 'processing') && (
+        <div className="mt-3 flex items-center gap-3">
+          {video.status === 'failed' && (
+            <p className="text-sm text-red-400">Processing failed.</p>
+          )}
+          <button
+            onClick={handleRetry}
+            disabled={retrying}
+            className="text-sm px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded disabled:opacity-50"
+          >
+            {retrying ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      )}
 
       {video.status === 'analyzed' && (
         <>
@@ -185,34 +210,22 @@ export default function VideoPage() {
             )
           )}
 
-          {/* Reels tab — redirect to reels page */}
-          {activeTab === 'reels' && (
-            <div className="text-center py-12">
-              <p className="text-gray-400 mb-4">View and generate highlight reels for this game.</p>
-              <Link
-                href={`/videos/${videoId}/reels`}
-                className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
-              >
-                Go to Reels
-              </Link>
-            </div>
-          )}
 
-          <div className="flex gap-3 mt-6">
-            <button
-              onClick={handleDownloadZip}
-              disabled={downloadingZip || (video as any)?.status !== 'analyzed'}
-              className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50"
-            >
-              {downloadingZip ? 'Preparing ZIP…' : 'Download ZIP'}
-            </button>
-            <button
-              onClick={handleGenerateReels}
-              disabled={generatingReels || reelsQueued || (video as any)?.status !== 'analyzed'}
-              className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
-            >
-              {reelsQueued ? 'Reels Queued ✓' : generatingReels ? 'Queuing…' : 'Generate Reels'}
-            </button>
+          <div className="mt-6 space-y-3">
+            <div className="flex gap-3">
+              {highlights.length > 0 && (
+                <button
+                  onClick={handleDownloadZip}
+                  disabled={downloadingZip}
+                  className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50"
+                >
+                  {downloadingZip ? 'Preparing ZIP…' : 'Download ZIP'}
+                </button>
+              )}
+            </div>
+            {actionError && (
+              <p className="text-sm text-red-400">{actionError}</p>
+            )}
           </div>
         </>
       )}

@@ -125,14 +125,14 @@ async def download_clips_zip(
         raise HTTPException(status_code=404, detail="Video not found")
 
     rows = await db.fetch(
-        """SELECT id, shot_type, r2_key_clip
+        """SELECT id, shot_type, sub_highlight_type, lowlight_type, r2_key_clip
            FROM highlights
            WHERE video_id = $1 AND r2_key_clip IS NOT NULL
            ORDER BY highlight_score DESC""",
         video_id,
     )
     if not rows:
-        raise HTTPException(status_code=409, detail="No clips available yet")
+        raise HTTPException(status_code=404, detail="No clips were detected in this video")
 
     client = get_r2_client()
 
@@ -140,8 +140,14 @@ async def download_clips_zip(
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
             for row in rows:
-                shot_type = row["shot_type"] or "unknown"
-                filename = f"{shot_type}/{str(row['id'])}.mp4"
+                is_lowlight = row["sub_highlight_type"] == "lowlight"
+                if is_lowlight:
+                    folder = "points_to_improve"
+                    label = row["lowlight_type"] or "error"
+                else:
+                    folder = "highlights"
+                    label = row["shot_type"] or "unknown"
+                filename = f"{folder}/{label}/{str(row['id'])}.mp4"
                 try:
                     obj = client.get_object(Bucket=settings.r2_bucket_name, Key=row["r2_key_clip"])
                     zf.writestr(filename, obj["Body"].read())

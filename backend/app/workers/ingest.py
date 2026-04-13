@@ -333,7 +333,10 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
                 row = await conn.fetchrow(
                     "SELECT highlight_preferences FROM users WHERE id = $1", user_id
                 )
-                return dict(row["highlight_preferences"] or {}) if row else {}
+                raw = row["highlight_preferences"] if row else None
+                if not raw:
+                    return {}
+                return json.loads(raw) if isinstance(raw, str) else dict(raw)
             finally:
                 await conn.close()
 
@@ -404,6 +407,13 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
         # Build motion signal + detect rallies
         motion_signal = build_motion_signal(frames)
         rallies: list[Rally] = detect_rallies(motion_signal, fps=2)
+        logger.info(
+            "video=%s frames=%d motion_mean=%.4f motion_max=%.4f rallies=%d",
+            video_id, len(frames),
+            float(np.mean(motion_signal)) if motion_signal else 0.0,
+            float(np.max(motion_signal)) if motion_signal else 0.0,
+            len(rallies),
+        )
 
         sm = ScoreStateMachine()
         rally_records = []
@@ -594,25 +604,36 @@ def _upsert_player_profile(video_id: str, user_id: str, labeled_frames: list) ->
     async def _upsert():
         conn = await asyncpg.connect(settings.database_url)
         try:
-            await conn.execute(
-                """INSERT INTO player_profiles
-                       (user_id, appearance_embedding, embedding_confidence, uploads_contributing)
-                   VALUES ($1, $2::vector, $3, 1)
-                   ON CONFLICT (user_id) DO UPDATE SET
-                     appearance_embedding = (
-                         player_profiles.appearance_embedding
-                             * player_profiles.uploads_contributing::float
-                         + EXCLUDED.appearance_embedding
-                     ) / (player_profiles.uploads_contributing + 1)::float,
-                     embedding_confidence = (
-                         player_profiles.embedding_confidence
-                             * player_profiles.uploads_contributing::float
-                         + EXCLUDED.embedding_confidence
-                     ) / (player_profiles.uploads_contributing + 1)::float,
-                     uploads_contributing = player_profiles.uploads_contributing + 1,
-                     updated_at = NOW()""",
-                user_id, avg_embedding.tolist(), avg_confidence,
+            existing = await conn.fetchrow(
+                "SELECT appearance_embedding, embedding_confidence, uploads_contributing "
+                "FROM player_profiles WHERE user_id = $1",
+                user_id,
             )
+            if existing:
+                n = existing["uploads_contributing"]
+                raw_emb = existing["appearance_embedding"]
+                old_emb = np.array(json.loads(raw_emb) if isinstance(raw_emb, str) else raw_emb)
+                old_conf = float(existing["embedding_confidence"])
+                merged_emb = (old_emb * n + avg_embedding) / (n + 1)
+                norm = np.linalg.norm(merged_emb)
+                merged_emb = merged_emb / norm if norm > 0 else merged_emb
+                merged_conf = (old_conf * n + avg_confidence) / (n + 1)
+                await conn.execute(
+                    """UPDATE player_profiles
+                       SET appearance_embedding = $1::vector,
+                           embedding_confidence = $2,
+                           uploads_contributing = $3,
+                           updated_at = NOW()
+                       WHERE user_id = $4""",
+                    str(merged_emb.tolist()), merged_conf, n + 1, user_id,
+                )
+            else:
+                await conn.execute(
+                    """INSERT INTO player_profiles
+                           (user_id, appearance_embedding, embedding_confidence, uploads_contributing)
+                       VALUES ($1, $2::vector, $3, 1)""",
+                    user_id, str(avg_embedding.tolist()), avg_confidence,
+                )
         finally:
             await conn.close()
 

@@ -55,7 +55,8 @@ def select_clips_for_output_type(
 
     if output_type in ("scored_point_rally", "full_rally_replay"):
         scored = [h for h in available if h.get("sub_highlight_type") == "point_scored"]
-        sorted_h = sorted(scored, key=lambda h: h["highlight_score"], reverse=True)
+        pool = scored if scored else available  # fall back to any highlights
+        sorted_h = sorted(pool, key=lambda h: h["highlight_score"], reverse=True)
         return sorted_h[:1]
 
     if output_type == "single_shot_clip":

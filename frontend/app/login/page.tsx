@@ -3,6 +3,7 @@
 export const dynamic = 'force-dynamic'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 
 export default function LoginPage() {
@@ -10,6 +11,7 @@ export default function LoginPage() {
   const [sent, setSent] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const router = useRouter()
   const supabase = createClient()
 
   async function handleLogin(e: React.FormEvent) {
@@ -26,6 +28,11 @@ export default function LoginPage() {
     } else {
       setSent(true)
     }
+  }
+
+  function handleDevLogin() {
+    localStorage.setItem('dev_token', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDEiLCJyb2xlIjoiYXV0aGVudGljYXRlZCIsImV4cCI6MTc3NjA5ODAxNywiaWF0IjoxNzc2MDExNjE3fQ.PhrVzjMveXGIwtkSgwydUlsy4lbCadWInQF7mQALsE8')
+    router.push('/videos')
   }
 
   if (sent) {
@@ -54,6 +61,11 @@ export default function LoginPage() {
           {loading ? 'Sending...' : 'Send magic link'}
         </button>
       </form>
+      {process.env.NODE_ENV === 'development' && (
+        <button onClick={handleDevLogin} className="mt-4 w-full text-sm text-gray-400 underline">
+          Dev: skip login
+        </button>
+      )}
     </div>
   )
 }
