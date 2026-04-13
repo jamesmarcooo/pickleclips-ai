@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import pytest
 from app.ml.ball_detection import BallDetection, BallDetector
@@ -32,6 +33,42 @@ def test_ball_detection_normalised_coords():
             assert 0.0 <= r.x <= 1.0
             assert 0.0 <= r.y <= 1.0
             assert 0.0 <= r.confidence <= 1.0
+
+
+def test_ball_detector_warns_when_no_weights(caplog):
+    """BallDetector must emit a WARNING when weights_path is None."""
+    with caplog.at_level(logging.WARNING, logger="app.ml.ball_detection"):
+        BallDetector(weights_path=None)
+    assert any("random weights" in record.message for record in caplog.records), (
+        "Expected a warning mentioning 'random weights' but got: "
+        + str([r.message for r in caplog.records])
+    )
+
+
+def test_ball_detector_warns_when_weights_file_missing(tmp_path, caplog):
+    """BallDetector must emit a WARNING when weights_path points to a missing file."""
+    missing = str(tmp_path / "does_not_exist.pt")
+    with caplog.at_level(logging.WARNING, logger="app.ml.ball_detection"):
+        BallDetector(weights_path=missing)
+    assert any("random weights" in record.message for record in caplog.records), (
+        "Expected a warning mentioning 'random weights' but got: "
+        + str([r.message for r in caplog.records])
+    )
+
+
+def test_ball_detector_no_warning_when_weights_exist(tmp_path, caplog):
+    """BallDetector must NOT warn when a weights file exists."""
+    import torch
+    weights_file = tmp_path / "weights.pt"
+    torch.save({}, str(weights_file))
+    with caplog.at_level(logging.WARNING, logger="app.ml.ball_detection"):
+        try:
+            BallDetector(weights_path=str(weights_file))
+        except Exception:
+            pass  # load_state_dict may raise on empty dict — fine for this test
+    assert not any("random weights" in record.message for record in caplog.records), (
+        "Unexpected 'random weights' warning when valid weights file exists"
+    )
 
 
 def test_ball_trajectory_from_detections():

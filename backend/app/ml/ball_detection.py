@@ -4,12 +4,15 @@ If weights_path is None (local dev), model runs with random weights — useful f
 """
 from __future__ import annotations
 
+import logging
 import numpy as np
 import cv2
 import torch
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+_logger = logging.getLogger(__name__)
 
 from app.ml.tracknetv2.model import TrackNetV2
 
@@ -35,6 +38,13 @@ class BallDetector:
         if weights_path and Path(weights_path).exists():
             state = torch.load(weights_path, map_location=self.device)
             self.model.load_state_dict(state)
+        else:
+            _logger.warning(
+                "BallDetector: no weights loaded (weights_path=%r) — "
+                "model uses random weights; all ball detections will return None; "
+                "shot classification will default to 'drive'",
+                weights_path,
+            )
 
     def _preprocess_triplet(self, frames: list[np.ndarray]) -> torch.Tensor:
         channels = []
