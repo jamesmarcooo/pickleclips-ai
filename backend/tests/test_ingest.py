@@ -3,6 +3,7 @@ import numpy as np
 from unittest.mock import patch, MagicMock
 from app.workers import ingest
 from app.services.usage_guard import QuotaExceededError
+from app.workers.ingest import _count_user_frames
 
 
 def test_extract_frames_returns_correct_count():
@@ -23,6 +24,70 @@ def test_extract_frames_returns_correct_count():
     # 60 seconds * 2 fps = 120 frames (±2 for rounding)
     assert 118 <= len(frames) <= 122
     assert isinstance(frames[0], np.ndarray)
+
+
+def _make_labeled_frames(pattern: list) -> list:
+    """Build labeled_frames where True = user detected, False = no detections."""
+    frames = []
+    for has_user in pattern:
+        if has_user:
+            frames.append([{"role": "user", "bbox": {"x": 0, "y": 0, "w": 10, "h": 10}}])
+        else:
+            frames.append([])
+    return frames
+
+
+def test_count_user_frames_all_present():
+    labeled = _make_labeled_frames([True, True, True])
+    with_user, total = _count_user_frames(labeled, frame_start=0, frame_end=2)
+    assert with_user == 3
+    assert total == 3
+
+
+def test_count_user_frames_none_present():
+    labeled = _make_labeled_frames([False, False, False])
+    with_user, total = _count_user_frames(labeled, frame_start=0, frame_end=2)
+    assert with_user == 0
+    assert total == 3
+
+
+def test_count_user_frames_partial():
+    labeled = _make_labeled_frames([True, False, True, False])
+    with_user, total = _count_user_frames(labeled, frame_start=0, frame_end=3)
+    assert with_user == 2
+    assert total == 4
+
+
+def test_count_user_frames_clamps_to_available_frames():
+    labeled = _make_labeled_frames([True, True])
+    with_user, total = _count_user_frames(labeled, frame_start=0, frame_end=99)
+    assert total == 2
+    assert with_user == 2
+
+
+def test_count_user_frames_subrange():
+    labeled = _make_labeled_frames([True, False, False, True])
+    with_user, total = _count_user_frames(labeled, frame_start=1, frame_end=2)
+    assert with_user == 0
+    assert total == 2
+
+
+def test_user_presence_filter_logic_skips_low_presence_rally():
+    """
+    _count_user_frames returning below 30% should cause a rally to be skipped.
+    Validates the filter threshold logic without running the full pipeline.
+    """
+    # 1 user frame out of 5 = 20% < 30% threshold → should skip
+    labeled = _make_labeled_frames([True, False, False, False, False])
+    with_user, total = _count_user_frames(labeled, frame_start=0, frame_end=4)
+    presence_ratio = with_user / total
+    assert presence_ratio < 0.30, "Expected <30% presence for this pattern"
+
+    # 2 user frames out of 5 = 40% >= 30% → should keep
+    labeled2 = _make_labeled_frames([True, False, True, False, False])
+    with_user2, total2 = _count_user_frames(labeled2, frame_start=0, frame_end=4)
+    presence_ratio2 = with_user2 / total2
+    assert presence_ratio2 >= 0.30, "Expected >=30% presence for this pattern"
 
 
 def test_ingest_quota_gate_blocks_when_over_limit():

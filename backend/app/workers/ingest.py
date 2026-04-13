@@ -283,6 +283,25 @@ def resume_after_identify(self, video_id: str, user_id: str, seed_bbox: dict):
     run_ai_pipeline.delay(video_id, user_id, seed_bbox)
 
 
+def _count_user_frames(
+    labeled_frames: list[list[dict]],
+    frame_start: int,
+    frame_end: int,
+) -> tuple[int, int]:
+    """
+    Count frames where the user role is present across [frame_start, frame_end].
+    Returns (frames_with_user, total_frames_checked).
+    Clamps frame_end to len(labeled_frames) - 1 to avoid IndexError on short videos.
+    """
+    total = 0
+    with_user = 0
+    for fi in range(frame_start, min(frame_end + 1, len(labeled_frames))):
+        total += 1
+        if any(d.get("role") == "user" for d in labeled_frames[fi]):
+            with_user += 1
+    return with_user, total
+
+
 @celery.task(bind=True, name="app.workers.ingest.run_ai_pipeline", max_retries=2)
 def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
     """
@@ -440,6 +459,26 @@ def run_ai_pipeline(self, video_id: str, user_id: str, seed_bbox: dict):
             fps = 2
             rally_frame_start = max(0, rally.start_time_ms * fps // 1000)
             rally_frame_end = min(len(frames) - 1, rally.end_time_ms * fps // 1000)
+
+            # Skip this rally if the user was not detected in enough frames.
+            # Prevents adjacent-court motion from generating highlight clips.
+            _MIN_USER_PRESENCE = 0.30
+            user_frames, total_frames = _count_user_frames(
+                labeled_frames, rally_frame_start, rally_frame_end
+            )
+            if total_frames > 0 and user_frames / total_frames < _MIN_USER_PRESENCE:
+                logger.info(
+                    "video=%s rally@%dms skipped — user present in %d/%d frames (%.0f%% < %.0f%%)",
+                    video_id,
+                    rally.start_time_ms,
+                    user_frames,
+                    total_frames,
+                    100 * user_frames / total_frames,
+                    100 * _MIN_USER_PRESENCE,
+                )
+                rally_records.pop()  # remove the record we just appended
+                continue
+
             mid_frame = (rally_frame_start + rally_frame_end) // 2
 
             ball_before = ball_detections[mid_frame - 1] if mid_frame > 0 else None
